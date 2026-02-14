@@ -1,0 +1,17 @@
+# Zig build artifacts
+zig-out/
+.zig-cache/
+
+# Nix / direnv
+.direnv/
+result
+result-*
+
+# Editor
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
