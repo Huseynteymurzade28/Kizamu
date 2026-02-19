@@ -1,225 +1,609 @@
 const std = @import("std");
 const posix = std.posix;
+const linux = std.os.linux;
 
-// =============================================================================
-// Linux input_event struct (from <linux/input.h>)
-// =============================================================================
-//
-// The kernel delivers input events as a stream of fixed-size structs.
-// We define the struct manually (no @cImport) using `extern struct` so that
-// Zig guarantees C-ABI-compatible layout: fields are laid out in declaration
-// order with natural alignment, matching what the kernel writes.
-//
-// C definition (64-bit):
-//
-//   struct input_event {
-//       struct timeval time;    // { long tv_sec; long tv_usec; }  → 16 bytes
-//       __u16 type;             // event type                      →  2 bytes
-//       __u16 code;             // event code (key scancode, etc.) →  2 bytes
-//       __s32 value;            // value (0/1/2 for keys)          →  4 bytes
-//   };                          //                          total  = 24 bytes
-//
-// On 64-bit Linux, `long` is 8 bytes, so timeval is 16 bytes.
-// There is no padding between the fields because u16+u16+i32 = 8 bytes,
-// which is already naturally aligned after the 16-byte timeval block.
-// =============================================================================
-const InputEvent = extern struct {
-    /// Seconds since Unix epoch (struct timeval.tv_sec — kernel `long`)
-    tv_sec: i64,
-    /// Microseconds component  (struct timeval.tv_usec — kernel `long`)
-    tv_usec: i64,
+// ═══════════════════════════════════════════════════════════════════════════
+// Word List — 200 common English words
+// ═══════════════════════════════════════════════════════════════════════════
 
-    /// Event type: EV_SYN(0x00), EV_KEY(0x01), EV_REL(0x02), EV_ABS(0x03)…
-    type: u16,
-    /// Event code: scancode for EV_KEY, axis id for EV_REL/EV_ABS, etc.
-    code: u16,
-    /// Event value: for EV_KEY → 0 = released, 1 = pressed, 2 = repeat
-    value: i32,
+const word_list = [_][]const u8{
+    "the",    "be",     "to",    "of",     "and",     "a",      "in",    "that",
+    "have",   "it",     "for",   "not",    "on",      "with",   "he",    "as",
+    "you",    "do",     "at",    "this",   "but",     "his",    "by",    "from",
+    "they",   "we",     "say",   "her",    "she",     "or",     "an",    "will",
+    "my",     "one",    "all",   "would",  "there",   "their",  "what",  "so",
+    "up",     "out",    "if",    "about",  "who",     "get",    "which", "go",
+    "me",     "when",   "make",  "can",    "like",    "time",   "no",    "just",
+    "him",    "know",   "take",  "people", "into",    "year",   "your",  "good",
+    "some",   "could",  "them",  "see",    "other",   "than",   "then",  "now",
+    "look",   "only",   "come",  "its",    "over",    "think",  "also",  "back",
+    "after",  "use",    "two",   "how",    "our",     "work",   "first", "well",
+    "way",    "even",   "new",   "want",   "because", "any",    "these", "give",
+    "day",    "most",   "us",    "great",  "between", "need",   "large", "under",
+    "never",  "each",   "right", "begin",  "help",    "always", "home",  "while",
+    "above",  "last",   "both",  "life",   "long",    "still",  "small", "end",
+    "hand",   "high",   "keep",  "place",  "where",   "much",   "might", "very",
+    "start",  "own",    "part",  "move",   "fact",    "world",  "head",  "thing",
+    "point",  "turn",   "old",   "play",   "run",     "set",    "few",   "house",
+    "number", "same",   "side",  "water",  "been",    "call",   "find",  "more",
+    "word",   "before", "must",  "down",   "should",  "kind",   "many",  "line",
+    "name",   "again",  "off",   "came",   "too",     "does",   "tell",  "said",
+    "found",  "next",   "every", "early",  "soon",    "hard",   "food",  "learn",
+    "near",   "city",   "tree",  "read",   "paper",   "group",  "open",  "state",
+    "close",  "night",  "real",  "often",  "light",   "change", "young", "stop",
+    "land",   "story",  "face",  "watch",  "color",   "care",
 };
 
-// Compile-time sanity check: the struct must be exactly 24 bytes on 64-bit.
-comptime {
-    if (@sizeOf(InputEvent) != 24) {
-        @compileError("InputEvent size mismatch — expected 24 bytes (64-bit Linux)");
+// ═══════════════════════════════════════════════════════════════════════════
+// Simple RNG (LCG — good enough for word shuffling)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const Rng = struct {
+    state: u64,
+
+    fn init() Rng {
+        const ns: u128 = @bitCast(std.time.nanoTimestamp());
+        return .{ .state = @truncate(ns) };
     }
-}
 
-// Event type constant from <linux/input-event-codes.h>
-const EV_KEY: u16 = 0x01;
-
-// Key state values
-const KEY_RELEASED: i32 = 0;
-const KEY_PRESSED: i32 = 1;
-const KEY_REPEAT: i32 = 2;
-
-/// Read exactly `buf.len` bytes from a POSIX fd using the raw read() syscall.
-/// Device files like /dev/input/eventX are *streaming* — they do not support
-/// positional reads (pread). We must use plain read() and loop to handle
-/// potential short reads (though evdev typically delivers complete events).
-fn readExact(fd: posix.fd_t, buf: []u8) !usize {
-    var index: usize = 0;
-    while (index < buf.len) {
-        const n = posix.read(fd, buf[index..]) catch |err| {
-            return err;
-        };
-        if (n == 0) return index; // EOF — device disconnected
-        index += n;
+    fn next(self: *Rng) u64 {
+        self.state = self.state *% 6364136223846793005 +% 1442695040888963407;
+        return self.state;
     }
-    return index;
-}
 
-/// Scan /proc/bus/input/devices to find the first keyboard event device.
-/// Returns the path (e.g. "/dev/input/event0") or null if not found.
-fn findKeyboardDevice(out_buf: []u8) ?[]const u8 {
-    const data = std.fs.cwd().readFile("/proc/bus/input/devices", out_buf) catch return null;
+    fn lessThan(self: *Rng, max: usize) usize {
+        return @intCast(self.next() % max);
+    }
+};
 
-    // Parse the devices file block by block.
-    // Each device block starts with "I:" and contains N:, P:, S:, U:, H:, B: lines.
-    // We look for EV= bitmask that includes bit 1 (EV_KEY) and a Handlers line
-    // with "kbd" + "eventN" — this identifies a real keyboard.
-    var it = std.mem.splitSequence(u8, data, "\n\n");
-    while (it.next()) |block| {
-        // Must have "kbd" handler (kernel keyboard driver attached)
-        const has_kbd = std.mem.indexOf(u8, block, "kbd") != null;
-        if (!has_kbd) continue;
+// ═══════════════════════════════════════════════════════════════════════════
+// Terminal — raw mode management
+// ═══════════════════════════════════════════════════════════════════════════
 
-        // Must have "sysrq" — the main system keyboard has sysrq support
-        const has_sysrq = std.mem.indexOf(u8, block, "sysrq") != null;
-        if (!has_sysrq) continue;
+const Terminal = struct {
+    original: posix.termios,
 
-        // Extract "eventN" from Handlers line
-        if (std.mem.indexOf(u8, block, "event")) |ev_pos| {
-            // Find the start of "event" followed by digits
-            const after_event = block[ev_pos..];
-            const event_prefix = "event";
-            var end: usize = event_prefix.len;
-            while (end < after_event.len and after_event[end] >= '0' and after_event[end] <= '9') {
-                end += 1;
+    fn enableRawMode() !Terminal {
+        const original = try posix.tcgetattr(posix.STDIN_FILENO);
+        var raw = original;
+
+        // Disable canonical mode, echo, signals, extended processing
+        raw.lflag.ECHO = false;
+        raw.lflag.ICANON = false;
+        raw.lflag.ISIG = false;
+        raw.lflag.IEXTEN = false;
+
+        // Disable input processing
+        raw.iflag.IXON = false;
+        raw.iflag.ICRNL = false;
+        raw.iflag.BRKINT = false;
+        raw.iflag.INPCK = false;
+        raw.iflag.ISTRIP = false;
+
+        // Disable output processing
+        raw.oflag.OPOST = false;
+
+        // Read returns after 1 byte, no timeout
+        raw.cc[@intFromEnum(linux.V.MIN)] = 1;
+        raw.cc[@intFromEnum(linux.V.TIME)] = 0;
+
+        try posix.tcsetattr(posix.STDIN_FILENO, .NOW, raw);
+        return .{ .original = original };
+    }
+
+    fn disableRawMode(self: *const Terminal) void {
+        posix.tcsetattr(posix.STDIN_FILENO, .NOW, self.original) catch {};
+    }
+
+    fn readByte(_: *const Terminal) !u8 {
+        var buf: [1]u8 = undefined;
+        const n = try posix.read(posix.STDIN_FILENO, &buf);
+        if (n == 0) return error.EndOfStream;
+        return buf[0];
+    }
+
+    fn hasPendingInput(_: *const Terminal, timeout_ms: i32) !bool {
+        var fds = [_]posix.pollfd{.{
+            .fd = posix.STDIN_FILENO,
+            .events = 1, // POLLIN
+            .revents = 0,
+        }};
+        const n = try posix.poll(&fds, timeout_ms);
+        return n > 0;
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Input — keyboard event parsing
+// ═══════════════════════════════════════════════════════════════════════════
+
+const Input = union(enum) {
+    char: u8,
+    backspace,
+    enter,
+    tab,
+    escape,
+    ctrl_c,
+    unknown,
+};
+
+fn readInput(term: *const Terminal) !Input {
+    const byte = try term.readByte();
+
+    return switch (byte) {
+        0x03 => .ctrl_c,
+        0x09 => .tab,
+        0x0D => .enter,
+        0x1B => blk: {
+            // Bare Escape or start of escape sequence (arrow keys etc.)
+            if (try term.hasPendingInput(50)) {
+                const next = term.readByte() catch break :blk .escape;
+                if (next == '[') {
+                    // CSI sequence — consume the final byte and ignore
+                    if (try term.hasPendingInput(50)) {
+                        _ = term.readByte() catch {};
+                    }
+                    break :blk .unknown;
+                }
+                break :blk .unknown;
             }
-            if (end > event_prefix.len) {
-                const event_name = after_event[0..end]; // e.g. "event0"
-                const prefix = "/dev/input/";
-                var path_buf: [64]u8 = undefined;
-                const path = std.fmt.bufPrint(&path_buf, "{s}{s}", .{ prefix, event_name }) catch return null;
-                // Copy to caller's buffer so we can return a stable slice
-                if (path.len <= out_buf.len) {
-                    // We'll reuse the very end of out_buf for the path
-                    const dest_start = out_buf.len - path.len;
-                    @memcpy(out_buf[dest_start..], path);
-                    return out_buf[dest_start..];
+            break :blk .escape;
+        },
+        0x7F => .backspace,
+        0x20...0x7E => .{ .char = byte },
+        else => .unknown,
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Game state
+// ═══════════════════════════════════════════════════════════════════════════
+
+const MAX_WORDS = 100;
+const MAX_INPUT = 64;
+
+const GameMode = enum {
+    words_10,
+    words_25,
+    words_50,
+    words_100,
+
+    fn count(self: GameMode) usize {
+        return switch (self) {
+            .words_10 => 10,
+            .words_25 => 25,
+            .words_50 => 50,
+            .words_100 => 100,
+        };
+    }
+
+    fn fromCount(n: usize) GameMode {
+        return switch (n) {
+            10 => .words_10,
+            25 => .words_25,
+            50 => .words_50,
+            else => .words_100,
+        };
+    }
+};
+
+const AppState = enum { menu, typing, results };
+
+const Game = struct {
+    words: [MAX_WORDS][]const u8 = .{""} ** MAX_WORDS,
+    word_count: usize = 0,
+    current_word: usize = 0,
+    input_buf: [MAX_INPUT]u8 = undefined,
+    input_len: usize = 0,
+    correct_chars: usize = 0,
+    incorrect_chars: usize = 0,
+    word_correct: [MAX_WORDS]bool = .{true} ** MAX_WORDS,
+    start_time: ?i64 = null,
+    end_time: ?i64 = null,
+
+    fn reset(self: *Game, mode: GameMode) void {
+        self.word_count = mode.count();
+        self.current_word = 0;
+        self.input_len = 0;
+        self.correct_chars = 0;
+        self.incorrect_chars = 0;
+        self.word_correct = .{true} ** MAX_WORDS;
+        self.start_time = null;
+        self.end_time = null;
+
+        var rng = Rng.init();
+        for (0..self.word_count) |i| {
+            self.words[i] = word_list[rng.lessThan(word_list.len)];
+        }
+    }
+
+    fn elapsedMs(self: *const Game) i64 {
+        const s = self.start_time orelse return 0;
+        const e = self.end_time orelse std.time.milliTimestamp();
+        return e - s;
+    }
+
+    fn wpm(self: *const Game) f64 {
+        const ms = self.elapsedMs();
+        if (ms <= 0) return 0;
+        const minutes = @as(f64, @floatFromInt(ms)) / 60000.0;
+        return (@as(f64, @floatFromInt(self.correct_chars)) / 5.0) / minutes;
+    }
+
+    fn accuracy(self: *const Game) f64 {
+        const total = self.correct_chars + self.incorrect_chars;
+        if (total == 0) return 100.0;
+        return (@as(f64, @floatFromInt(self.correct_chars)) /
+            @as(f64, @floatFromInt(total))) * 100.0;
+    }
+
+    fn finishWord(self: *Game) void {
+        const word = self.words[self.current_word];
+        if (self.input_len != word.len) {
+            self.word_correct[self.current_word] = false;
+        } else {
+            var ok = true;
+            for (0..word.len) |i| {
+                if (self.input_buf[i] != word[i]) {
+                    ok = false;
+                    break;
                 }
             }
+            self.word_correct[self.current_word] = ok;
         }
+        // Count space as correct char (standard WPM includes spaces)
+        // but not after the last word
+        if (self.current_word + 1 < self.word_count) {
+            self.correct_chars += 1;
+        }
+        self.current_word += 1;
+        self.input_len = 0;
     }
-    return null;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Rendering helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+const BufWriter = std.io.FixedBufferStream([]u8).Writer;
+
+fn writeRaw(data: []const u8) void {
+    var off: usize = 0;
+    while (off < data.len) {
+        off += posix.write(posix.STDOUT_FILENO, data[off..]) catch return;
+    }
 }
 
+fn moveTo(w: BufWriter, row: u16, col: u16) !void {
+    try w.print("\x1b[{d};{d}H", .{ row, col });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Menu screen
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn drawMenu(w: BufWriter, term_w: u16) !void {
+    try w.writeAll("\x1b[2J\x1b[H\x1b[?25l");
+
+    const cx: u16 = term_w / 2;
+    const bx: u16 = if (cx >= 14) cx - 14 else 1;
+
+    try moveTo(w, 3, bx);
+    try w.writeAll("\x1b[36m╔════════════════════════════╗\x1b[0m");
+    try moveTo(w, 4, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m  \x1b[1m\x1b[97mKIZAMU\x1b[0m                   \x1b[36m║\x1b[0m");
+    try moveTo(w, 5, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m  \x1b[90mtyping practice\x1b[0m          \x1b[36m║\x1b[0m");
+    try moveTo(w, 6, bx);
+    try w.writeAll("\x1b[36m╠════════════════════════════╣\x1b[0m");
+    try moveTo(w, 7, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m                            \x1b[36m║\x1b[0m");
+    try moveTo(w, 8, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m   \x1b[33m[1]\x1b[0m   10 words          \x1b[36m║\x1b[0m");
+    try moveTo(w, 9, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m   \x1b[33m[2]\x1b[0m   25 words          \x1b[36m║\x1b[0m");
+    try moveTo(w, 10, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m   \x1b[33m[3]\x1b[0m   50 words          \x1b[36m║\x1b[0m");
+    try moveTo(w, 11, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m   \x1b[33m[4]\x1b[0m  100 words          \x1b[36m║\x1b[0m");
+    try moveTo(w, 12, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m                            \x1b[36m║\x1b[0m");
+    try moveTo(w, 13, bx);
+    try w.writeAll("\x1b[36m╚════════════════════════════╝\x1b[0m");
+
+    try moveTo(w, 15, bx);
+    try w.writeAll("  \x1b[90mPress 1-4 to start, Esc to quit\x1b[0m");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Typing screen
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn drawTyping(w: BufWriter, game: *const Game, term_w: u16) !void {
+    try w.writeAll("\x1b[2J\x1b[H\x1b[?25l");
+
+    const margin: u16 = 4;
+    const max_width: u16 = if (term_w > margin * 2 + 10) term_w - margin * 2 else 40;
+
+    // Header
+    try moveTo(w, 1, margin);
+    try w.writeAll("\x1b[36m\x1b[1mKIZAMU\x1b[0m");
+
+    // Live stats on the right
+    if (game.start_time != null) {
+        const stats_col: u16 = if (term_w > 30) term_w - 30 else margin + 10;
+        try moveTo(w, 1, stats_col);
+        try w.print("\x1b[90mWPM: \x1b[33m{d:.1}\x1b[90m | Acc: \x1b[33m{d:.1}%\x1b[0m", .{
+            game.wpm(),
+            game.accuracy(),
+        });
+    }
+
+    // Separator
+    try moveTo(w, 2, margin);
+    try w.writeAll("\x1b[90m");
+    {
+        var i: u16 = 0;
+        while (i < max_width) : (i += 1) {
+            try w.writeAll("\xe2\x94\x80"); // ─ in UTF-8
+        }
+    }
+    try w.writeAll("\x1b[0m");
+
+    // Words display
+    var row: u16 = 4;
+    var col: u16 = margin;
+
+    for (0..game.word_count) |word_idx| {
+        const word = game.words[word_idx];
+        const wlen: u16 = @intCast(word.len);
+
+        // Word wrap
+        if (col != margin and col + wlen > margin + max_width) {
+            row += 1;
+            col = margin;
+        }
+
+        try moveTo(w, row, col);
+
+        if (word_idx < game.current_word) {
+            // Completed word
+            if (game.word_correct[word_idx]) {
+                try w.writeAll("\x1b[32m"); // green
+            } else {
+                try w.writeAll("\x1b[31m"); // red
+            }
+            try w.writeAll(word);
+            try w.writeAll("\x1b[0m");
+        } else if (word_idx == game.current_word) {
+            // Current word — character by character coloring
+            for (0..word.len) |ci| {
+                if (ci < game.input_len) {
+                    if (game.input_buf[ci] == word[ci]) {
+                        try w.writeAll("\x1b[32m"); // green
+                    } else {
+                        try w.writeAll("\x1b[31m\x1b[4m"); // red + underline
+                    }
+                    try w.writeByte(word[ci]);
+                    try w.writeAll("\x1b[0m");
+                } else if (ci == game.input_len) {
+                    // Cursor position
+                    try w.writeAll("\x1b[97m\x1b[4m"); // bright white + underline
+                    try w.writeByte(word[ci]);
+                    try w.writeAll("\x1b[0m");
+                } else {
+                    try w.writeAll("\x1b[90m"); // gray
+                    try w.writeByte(word[ci]);
+                    try w.writeAll("\x1b[0m");
+                }
+            }
+            // Extra typed chars beyond word length
+            if (game.input_len > word.len) {
+                try w.writeAll("\x1b[31m\x1b[4m"); // red + underline
+                for (word.len..game.input_len) |ei| {
+                    try w.writeByte(game.input_buf[ei]);
+                }
+                try w.writeAll("\x1b[0m");
+            }
+        } else {
+            // Future word
+            try w.writeAll("\x1b[90m"); // gray
+            try w.writeAll(word);
+            try w.writeAll("\x1b[0m");
+        }
+
+        col += wlen + 1;
+    }
+
+    // Progress + help
+    const info_row = row + 3;
+    try moveTo(w, info_row, margin);
+    try w.print("\x1b[90m{d}/{d} words\x1b[0m", .{ game.current_word, game.word_count });
+
+    const help_col: u16 = if (term_w > 30) term_w - 28 else margin;
+    try moveTo(w, info_row, help_col);
+    try w.writeAll("\x1b[90m[Tab] restart  [Esc] menu\x1b[0m");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Results screen
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn drawResults(w: BufWriter, game: *const Game, term_w: u16) !void {
+    try w.writeAll("\x1b[2J\x1b[H\x1b[?25l");
+
+    const cx: u16 = term_w / 2;
+    const bx: u16 = if (cx >= 16) cx - 16 else 1;
+    const seconds = @as(f64, @floatFromInt(game.elapsedMs())) / 1000.0;
+
+    try moveTo(w, 3, bx);
+    try w.writeAll("\x1b[36m╔════════════════════════════════╗\x1b[0m");
+    try moveTo(w, 4, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m          \x1b[1m\x1b[97mRESULTS\x1b[0m             \x1b[36m║\x1b[0m");
+    try moveTo(w, 5, bx);
+    try w.writeAll("\x1b[36m╠════════════════════════════════╣\x1b[0m");
+    try moveTo(w, 6, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m                                \x1b[36m║\x1b[0m");
+
+    try moveTo(w, 7, bx);
+    try w.print("\x1b[36m║\x1b[0m  WPM:       \x1b[33m\x1b[1m{d:>8.1}\x1b[0m         \x1b[36m║\x1b[0m", .{game.wpm()});
+
+    try moveTo(w, 8, bx);
+    try w.print("\x1b[36m║\x1b[0m  Accuracy:  \x1b[33m\x1b[1m{d:>7.1}%\x1b[0m         \x1b[36m║\x1b[0m", .{game.accuracy()});
+
+    try moveTo(w, 9, bx);
+    try w.print("\x1b[36m║\x1b[0m  Time:      \x1b[97m{d:>7.1}s\x1b[0m         \x1b[36m║\x1b[0m", .{seconds});
+
+    try moveTo(w, 10, bx);
+    try w.print("\x1b[36m║\x1b[0m  Words:     \x1b[97m{d:>8}\x1b[0m         \x1b[36m║\x1b[0m", .{game.word_count});
+
+    try moveTo(w, 11, bx);
+    try w.print("\x1b[36m║\x1b[0m  Correct:   \x1b[32m{d:>8}\x1b[0m         \x1b[36m║\x1b[0m", .{game.correct_chars});
+
+    try moveTo(w, 12, bx);
+    try w.print("\x1b[36m║\x1b[0m  Errors:    \x1b[31m{d:>8}\x1b[0m         \x1b[36m║\x1b[0m", .{game.incorrect_chars});
+
+    try moveTo(w, 13, bx);
+    try w.writeAll("\x1b[36m║\x1b[0m                                \x1b[36m║\x1b[0m");
+    try moveTo(w, 14, bx);
+    try w.writeAll("\x1b[36m╚════════════════════════════════╝\x1b[0m");
+
+    try moveTo(w, 16, bx);
+    try w.writeAll("  \x1b[90m[Enter] play again  [Tab] menu  [Esc] quit\x1b[0m");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Main
+// ═══════════════════════════════════════════════════════════════════════════
+
 pub fn main() !void {
-    // ── Argument parsing ────────────────────────────────────────────────
-    var args = std.process.args();
-    _ = args.next(); // skip argv[0] (program name)
+    var term = try Terminal.enableRawMode();
+    defer {
+        writeRaw("\x1b[?1049l"); // leave alt screen
+        writeRaw("\x1b[?25h"); // show cursor
+        writeRaw("\x1b[0m"); // reset colors
+        term.disableRawMode();
+    }
 
-    // Auto-detect keyboard if no argument given
-    var detect_buf: [8192]u8 = undefined;
-    const device_path: []const u8 = args.next() orelse blk: {
-        if (findKeyboardDevice(&detect_buf)) |path| {
-            std.debug.print("Klavye otomatik tespit edildi: {s}\n", .{path});
-            break :blk path;
-        }
-        std.debug.print("Kullanim: kizamu <cihaz_yolu>\n", .{});
-        std.debug.print("Ornek:    sudo ./zig-out/bin/kizamu /dev/input/event0\n\n", .{});
-        std.debug.print("Mevcut cihazlari gormek icin:\n", .{});
-        std.debug.print("  cat /proc/bus/input/devices\n", .{});
-        std.debug.print("  ls -la /dev/input/event*\n", .{});
-        std.process.exit(1);
-    };
+    // Enter alternate screen buffer
+    writeRaw("\x1b[?1049h");
 
-    // ── Open the input device ───────────────────────────────────────────
-    // We use std.fs.openFileAbsolute because device paths are always absolute
-    // (e.g. /dev/input/event0). Read-only is sufficient — we only consume events.
-    const file = std.fs.openFileAbsolute(device_path, .{ .mode = .read_only }) catch |err| {
-        switch (err) {
-            error.AccessDenied => {
-                std.debug.print("Hata: Erisim reddedildi — '{s}'\n", .{device_path});
-                std.debug.print("  sudo ile calistirmayi deneyin:\n", .{});
-                std.debug.print("  sudo ./zig-out/bin/kizamu {s}\n", .{device_path});
-            },
-            error.FileNotFound => {
-                std.debug.print("Hata: Cihaz bulunamadi — '{s}'\n", .{device_path});
-                std.debug.print("  Mevcut cihazlari listeleyin:\n", .{});
-                std.debug.print("  ls -la /dev/input/event*\n", .{});
-            },
-            else => {
-                std.debug.print("Hata: Cihaz acilamadi — {}\n", .{err});
-            },
-        }
-        std.process.exit(1);
-    };
-    defer file.close();
-
-    // Get the raw file descriptor for direct POSIX read().
-    // Device files are streaming — they don't support pread/positional I/O.
-    // Using the raw fd with read() is the most reliable approach for evdev.
-    const fd = file.handle;
-
-    std.debug.print("╔══════════════════════════════════════════╗\n", .{});
-    std.debug.print("║  Kizamu — Raw Input Reader               ║\n", .{});
-    std.debug.print("╠══════════════════════════════════════════╣\n", .{});
-    std.debug.print("║  Cihaz : {s:<31} ║\n", .{device_path});
-    std.debug.print("╚══════════════════════════════════════════╝\n", .{});
-    std.debug.print("Cikmak icin Ctrl+C basin.\n\n", .{});
-
-    // ── Event loop ──────────────────────────────────────────────────────
-    // We read exactly @sizeOf(InputEvent) bytes per iteration using raw
-    // POSIX read(). The kernel guarantees that each read() on an evdev fd
-    // delivers one or more complete input_event structs atomically.
-    const event_size = @sizeOf(InputEvent);
-    var buf: [event_size]u8 align(@alignOf(InputEvent)) = undefined;
+    var screen_buf: [32768]u8 = undefined;
+    var game = Game{};
+    var state: AppState = .menu;
+    const term_w: u16 = 80; // sensible default
 
     while (true) {
-        // Read one complete input_event from the device fd.
-        // readExact uses POSIX read() which works correctly on streaming
-        // device files (unlike pread-based readers).
-        const bytes_read = readExact(fd, &buf) catch |err| {
-            std.debug.print("Okuma hatasi: {}\n", .{err});
-            std.process.exit(1);
-        };
+        var fbs = std.io.fixedBufferStream(&screen_buf);
+        const w = fbs.writer();
 
-        if (bytes_read != event_size) {
-            // Incomplete read means the device was likely disconnected
-            std.debug.print("Eksik okuma: {d}/{d} bayt — cihaz koparilmis olabilir.\n", .{ bytes_read, event_size });
-            break;
+        switch (state) {
+            .menu => {
+                try drawMenu(w, term_w);
+                writeRaw(fbs.getWritten());
+
+                const input = try readInput(&term);
+                switch (input) {
+                    .char => |c| switch (c) {
+                        '1' => {
+                            game.reset(.words_10);
+                            state = .typing;
+                        },
+                        '2' => {
+                            game.reset(.words_25);
+                            state = .typing;
+                        },
+                        '3' => {
+                            game.reset(.words_50);
+                            state = .typing;
+                        },
+                        '4' => {
+                            game.reset(.words_100);
+                            state = .typing;
+                        },
+                        else => {},
+                    },
+                    .escape, .ctrl_c => return,
+                    else => {},
+                }
+            },
+
+            .typing => {
+                try drawTyping(w, &game, term_w);
+                writeRaw(fbs.getWritten());
+
+                const input = try readInput(&term);
+                switch (input) {
+                    .char => |c| {
+                        if (game.start_time == null) {
+                            game.start_time = std.time.milliTimestamp();
+                        }
+
+                        if (c == ' ') {
+                            game.finishWord();
+                            if (game.current_word >= game.word_count) {
+                                game.end_time = std.time.milliTimestamp();
+                                state = .results;
+                            }
+                        } else {
+                            if (game.input_len < MAX_INPUT) {
+                                const word = game.words[game.current_word];
+                                if (game.input_len < word.len) {
+                                    if (c == word[game.input_len]) {
+                                        game.correct_chars += 1;
+                                    } else {
+                                        game.incorrect_chars += 1;
+                                    }
+                                } else {
+                                    game.incorrect_chars += 1;
+                                }
+                                game.input_buf[game.input_len] = c;
+                                game.input_len += 1;
+                            }
+                        }
+                    },
+                    .backspace => {
+                        if (game.input_len > 0) {
+                            game.input_len -= 1;
+                            const word = game.words[game.current_word];
+                            if (game.input_len < word.len) {
+                                if (game.input_buf[game.input_len] == word[game.input_len]) {
+                                    if (game.correct_chars > 0) game.correct_chars -= 1;
+                                } else {
+                                    if (game.incorrect_chars > 0) game.incorrect_chars -= 1;
+                                }
+                            } else {
+                                if (game.incorrect_chars > 0) game.incorrect_chars -= 1;
+                            }
+                        }
+                    },
+                    .tab => {
+                        game.reset(GameMode.fromCount(game.word_count));
+                    },
+                    .escape, .ctrl_c => {
+                        state = .menu;
+                    },
+                    else => {},
+                }
+            },
+
+            .results => {
+                try drawResults(w, &game, term_w);
+                writeRaw(fbs.getWritten());
+
+                const input = try readInput(&term);
+                switch (input) {
+                    .enter => {
+                        game.reset(GameMode.fromCount(game.word_count));
+                        state = .typing;
+                    },
+                    .tab => {
+                        state = .menu;
+                    },
+                    .escape, .ctrl_c => return,
+                    else => {},
+                }
+            },
         }
-
-        // Reinterpret the aligned byte buffer as an InputEvent pointer.
-        // Safe because: (1) buf is aligned to @alignOf(InputEvent),
-        //               (2) InputEvent is extern struct with defined layout,
-        //               (3) we verified we read exactly @sizeOf(InputEvent) bytes.
-        const event: *const InputEvent = @ptrCast(&buf);
-
-        // Filter: only process EV_KEY events (type == 1).
-        // This skips EV_SYN (synchronization markers), EV_REL (mouse deltas),
-        // EV_MSC (miscellaneous), and all other event types.
-        if (event.type != EV_KEY) continue;
-
-        // Decode key state to a human-readable string
-        const state: []const u8 = switch (event.value) {
-            KEY_PRESSED => "Pressed",
-            KEY_RELEASED => "Released",
-            KEY_REPEAT => "Repeat",
-            else => "Unknown",
-        };
-
-        // Output in the requested format:
-        // [Timestamp] KeyCode: {d} | State: {s}
-        // Using std.debug.print (writes to stderr, unbuffered) for immediate
-        // visibility — no buffering delay when monitoring live keystrokes.
-        // Cast tv_usec to u64 to avoid the '+' sign prefix on positive i64 values.
-        std.debug.print("[{d}.{d:0>6}] KeyCode: {d} | State: {s}\n", .{
-            event.tv_sec,
-            @as(u64, @intCast(event.tv_usec)),
-            event.code,
-            state,
-        });
     }
 }
