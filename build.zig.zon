@@ -1,0 +1,13 @@
+.{
+    .name = .kizamu,
+    .fingerprint = 0xfa783ab0265df671,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.0",
+    .dependencies = .{
+        .vaxis = .{
+            .url = "git+https://github.com/rockorager/libvaxis?ref=main#67bbc1ee072aa390838c66caf4ed47edee282dc4",
+            .hash = "vaxis-0.5.1-BWNV_IxJCQC5OGNaXQfNnqgn9_Vku0PMgey-dplubcQK",
+        },
+    },
+    .paths = .{""},
+}
