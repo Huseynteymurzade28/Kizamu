@@ -1,9 +1,35 @@
+// Kizamu — Game state, modes, difficulty, and statistics.
 const std = @import("std");
 const words_mod = @import("words.zig");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 pub const MAX_WORDS = 200;
 pub const MAX_INPUT = 64;
+
+// ─── Difficulty ──────────────────────────────────────────────────────────────
+pub const Difficulty = enum {
+    easy,
+    medium,
+    hard,
+
+    pub fn label(self: Difficulty) []const u8 {
+        return switch (self) {
+            .easy => "Easy",
+            .medium => "Medium",
+            .hard => "Hard",
+        };
+    }
+
+    pub fn poolSize(self: Difficulty) usize {
+        return switch (self) {
+            .easy => 100,
+            .medium => 300,
+            .hard => words_mod.word_list.len,
+        };
+    }
+};
+
+pub const ALL_DIFFICULTIES = [_]Difficulty{ .easy, .medium, .hard };
 
 // ─── Game Mode ───────────────────────────────────────────────────────────────
 pub const GameMode = enum {
@@ -12,24 +38,34 @@ pub const GameMode = enum {
     words_50,
     words_100,
     words_200,
+    timed_15,
+    timed_30,
+    timed_60,
 
-    pub fn count(self: GameMode) usize {
+    pub fn isTimed(self: GameMode) bool {
+        return switch (self) {
+            .timed_15, .timed_30, .timed_60 => true,
+            else => false,
+        };
+    }
+
+    pub fn timeLimitMs(self: GameMode) i64 {
+        return switch (self) {
+            .timed_15 => 15_000,
+            .timed_30 => 30_000,
+            .timed_60 => 60_000,
+            else => 0,
+        };
+    }
+
+    pub fn wordGenCount(self: GameMode) usize {
         return switch (self) {
             .words_10 => 10,
             .words_25 => 25,
             .words_50 => 50,
             .words_100 => 100,
             .words_200 => 200,
-        };
-    }
-
-    pub fn fromCount(n: usize) GameMode {
-        return switch (n) {
-            10 => .words_10,
-            25 => .words_25,
-            50 => .words_50,
-            100 => .words_100,
-            else => .words_200,
+            .timed_15, .timed_30, .timed_60 => MAX_WORDS,
         };
     }
 
@@ -40,12 +76,16 @@ pub const GameMode = enum {
             .words_50 => "50 words",
             .words_100 => "100 words",
             .words_200 => "200 words",
+            .timed_15 => "15 seconds",
+            .timed_30 => "30 seconds",
+            .timed_60 => "60 seconds",
         };
     }
 };
 
 pub const ALL_MODES = [_]GameMode{
     .words_10, .words_25, .words_50, .words_100, .words_200,
+    .timed_15, .timed_30, .timed_60,
 };
 
 // ─── Simple LCG RNG ──────────────────────────────────────────────────────────
@@ -67,6 +107,9 @@ pub const Rng = struct {
     }
 };
 
+// ─── Error tracking ──────────────────────────────────────────────────────────
+pub const CharError = struct { char: u8, count: u16 };
+
 // ─── Game State ──────────────────────────────────────────────────────────────
 pub const Game = struct {
     words: [MAX_WORDS][]const u8 = .{""} ** MAX_WORDS,
@@ -76,25 +119,34 @@ pub const Game = struct {
     input_len: usize = 0,
     correct_chars: usize = 0,
     incorrect_chars: usize = 0,
+    total_chars_typed: usize = 0,
+    backspace_count: usize = 0,
+    char_errors: [128]u16 = .{0} ** 128,
     word_correct: [MAX_WORDS]bool = .{true} ** MAX_WORDS,
     start_time: ?i64 = null,
     end_time: ?i64 = null,
     mode: GameMode = .words_25,
+    difficulty: Difficulty = .medium,
 
-    pub fn reset(self: *Game, m: GameMode) void {
+    pub fn reset(self: *Game, m: GameMode, diff: Difficulty) void {
         self.mode = m;
-        self.word_count = m.count();
+        self.difficulty = diff;
+        self.word_count = m.wordGenCount();
         self.current_word = 0;
         self.input_len = 0;
         self.correct_chars = 0;
         self.incorrect_chars = 0;
+        self.total_chars_typed = 0;
+        self.backspace_count = 0;
+        self.char_errors = .{0} ** 128;
         self.word_correct = .{true} ** MAX_WORDS;
         self.start_time = null;
         self.end_time = null;
 
         var rng = Rng.init();
+        const pool = diff.poolSize();
         for (0..self.word_count) |i| {
-            self.words[i] = words_mod.word_list[rng.lessThan(words_mod.word_list.len)];
+            self.words[i] = words_mod.word_list[rng.lessThan(pool)];
         }
     }
 
@@ -105,7 +157,7 @@ pub const Game = struct {
         return e - s;
     }
 
-    /// Words per minute based on correctly-typed characters.
+    /// Net WPM based on correctly-typed characters.
     pub fn wpm(self: *const Game) f64 {
         const ms = self.elapsedMs();
         if (ms <= 0) return 0;
@@ -113,7 +165,15 @@ pub const Game = struct {
         return (@as(f64, @floatFromInt(self.correct_chars)) / 5.0) / minutes;
     }
 
-    /// Accuracy as a percentage (0-100).
+    /// Raw WPM based on all typed characters (before correction).
+    pub fn rawWpm(self: *const Game) f64 {
+        const ms = self.elapsedMs();
+        if (ms <= 0) return 0;
+        const minutes: f64 = @as(f64, @floatFromInt(ms)) / 60_000.0;
+        return (@as(f64, @floatFromInt(self.total_chars_typed)) / 5.0) / minutes;
+    }
+
+    /// Accuracy as a percentage (0–100).
     pub fn accuracy(self: *const Game) f64 {
         const total = self.correct_chars + self.incorrect_chars;
         if (total == 0) return 100.0;
@@ -126,6 +186,30 @@ pub const Game = struct {
         var n: usize = 0;
         for (0..self.current_word) |i| {
             if (self.word_correct[i]) n += 1;
+        }
+        return n;
+    }
+
+    /// Get the top N most-errored characters.  Returns entries written.
+    pub fn topErrors(self: *const Game, out: []CharError) usize {
+        var all: [96]CharError = undefined;
+        var count: usize = 0;
+        for (32..127) |ci| {
+            if (self.char_errors[ci] > 0) {
+                all[count] = .{ .char = @intCast(ci), .count = self.char_errors[ci] };
+                count += 1;
+            }
+        }
+        const n = @min(count, out.len);
+        for (0..n) |i| {
+            var max_idx: usize = i;
+            for (i + 1..count) |j| {
+                if (all[j].count > all[max_idx].count) max_idx = j;
+            }
+            const tmp = all[i];
+            all[i] = all[max_idx];
+            all[max_idx] = tmp;
+            out[i] = all[i];
         }
         return n;
     }
@@ -149,5 +233,27 @@ pub const Game = struct {
         }
         self.current_word += 1;
         self.input_len = 0;
+    }
+
+    /// Check if time has expired (for timed modes).
+    pub fn isTimeUp(self: *const Game) bool {
+        if (!self.mode.isTimed()) return false;
+        const s = self.start_time orelse return false;
+        const now = std.time.milliTimestamp();
+        return (now - s) >= self.mode.timeLimitMs();
+    }
+
+    /// Remaining time in milliseconds (for timed modes).
+    pub fn remainingMs(self: *const Game) i64 {
+        if (!self.mode.isTimed()) return 0;
+        const s = self.start_time orelse return self.mode.timeLimitMs();
+        const elapsed = std.time.milliTimestamp() - s;
+        const remaining = self.mode.timeLimitMs() - elapsed;
+        return if (remaining > 0) remaining else 0;
+    }
+
+    /// Total keypresses (chars + backspaces).
+    pub fn totalKeystrokes(self: *const Game) usize {
+        return self.total_chars_typed + self.backspace_count;
     }
 };

@@ -1,5 +1,6 @@
 # Zig build artifacts
 zig-out/
+zig-cache/
 .zig-cache/
 
 # Nix / direnv
@@ -7,11 +8,24 @@ zig-out/
 result
 result-*
 
-# Editor
+# Editor / IDE
 .vscode/
+.idea/
 *.swp
+*.swo
 *~
+\#*\#
+.#*
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Core dumps
+core
+core.*
+vgcore.*
