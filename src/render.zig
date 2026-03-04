@@ -1,12 +1,8 @@
 // Kizamu — TUI rendering (Tokyo Night palette).
-//
-// BUG FIX: All numeric values are rendered digit-by-digit using writeCell with
-// static grapheme references (DIGITS table in .rodata).  This avoids the
-// dangling-pointer bug where bufPrint'd stack slices were stored in vaxis cells
-// but freed before vx.render() — producing garbled "���" output for WPM, etc.
 const std = @import("std");
 const vaxis = @import("vaxis");
 const game_mod = @import("game.zig");
+const words_mod = @import("words.zig");
 
 const Game = game_mod.Game;
 const Segment = vaxis.Segment;
@@ -36,6 +32,7 @@ const s_accent_bold: Style = .{ .fg = c_accent, .bold = true };
 const s_accent2: Style = .{ .fg = c_accent2 };
 const s_correct: Style = .{ .fg = c_correct };
 const s_correct_b: Style = .{ .fg = c_correct, .bold = true };
+const s_correct_bold: Style = .{ .fg = c_correct, .bold = true };
 const s_error: Style = .{ .fg = c_error };
 const s_error_ul: Style = .{ .fg = c_error, .ul_style = .curly, .ul = c_error };
 const s_dim: Style = .{ .fg = c_dim };
@@ -165,9 +162,9 @@ fn drawSep(win: Window, col: u16, row: u16, width: u16) void {
 // MENU SCREEN
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn drawMenu(win: Window, cursor: usize, diff_cursor: usize, frame: u32) void {
-    const BOX_W: u16 = 42;
-    const BOX_H: u16 = 22;
+pub fn drawMenu(win: Window, cursor: usize, diff_cursor: usize, cat_cursor: usize, frame: u32) void {
+    const BOX_W: u16 = 52;
+    const BOX_H: u16 = 30;
 
     if (win.width < BOX_W + 2 or win.height < BOX_H + 2) return;
 
@@ -188,7 +185,7 @@ pub fn drawMenu(win: Window, cursor: usize, diff_cursor: usize, frame: u32) void
 
     // ── Animated title ──────────────────────────────────────────────────────
     {
-        const lcols = [_]u16{ 3, 7, 11, 15, 19, 23 };
+        const lcols = [_]u16{ 6, 10, 14, 18, 22, 26 };
         const letters = "KIZAMU";
         const WAVE: u32 = 18;
         const wave_pos = frame % WAVE;
@@ -209,80 +206,91 @@ pub fn drawMenu(win: Window, cursor: usize, diff_cursor: usize, frame: u32) void
             const bold = dist <= 2;
             print1(box, lc, 1, letters[li .. li + 1], .{ .fg = col, .bold = bold });
         }
-        const sep_cols = [_]u16{ 5, 9, 13, 17, 21 };
+        const sep_cols = [_]u16{ 8, 12, 16, 20, 24 };
         for (sep_cols) |sc| {
             print1(box, sc, 1, ".", s_dim);
         }
     }
-    print1(box, 3, 2, "typing practice", s_dim);
+    print1(box, 6, 2, "typing practice", s_dim);
 
     // ── Separator ───────────────────────────────────────────────────────────
     drawSep(box, 0, 3, box.width);
 
+    // ── Category selector (centered, larger) ─────────────────────────────────
+    {
+        print1(box, 4, 4, "Category:", s_dim);
+        const cat = words_mod.ALL_CATEGORIES[cat_cursor];
+        print1(box, 15, 4, "[<]", s_accent);
+        const catlabel = words_mod.categoryLabel(cat);
+        print1(box, 20, 4, catlabel, .{ .fg = c_accent2, .bold = true });
+        print1(box, 20 + @as(u16, @intCast(catlabel.len)), 4, " >]", s_accent);
+    }
+
     // ── Difficulty selector ─────────────────────────────────────────────────
     {
-        print1(box, 3, 4, "Difficulty", s_dim);
+        print1(box, 4, 5, "Difficulty:", s_dim);
         const diff = game_mod.ALL_DIFFICULTIES[diff_cursor];
-        print1(box, 15, 4, "<", s_accent);
+        print1(box, 17, 5, "[<]", s_accent);
         const dlabel = diff.label();
-        print1(box, 17, 4, dlabel, .{ .fg = c_magenta, .bold = true });
-        print1(box, 17 + @as(u16, @intCast(dlabel.len)) + 1, 4, ">", s_accent);
+        print1(box, 22, 5, dlabel, .{ .fg = c_magenta, .bold = true });
+        print1(box, 22 + @as(u16, @intCast(dlabel.len)), 5, " >]", s_accent);
     }
 
     // ── Separator ───────────────────────────────────────────────────────────
-    drawSep(box, 0, 5, box.width);
+    drawSep(box, 0, 6, box.width);
 
     // ── WORD COUNT section ──────────────────────────────────────────────────
-    print1(box, 3, 6, "WORD COUNT", s_accent2);
+    print1(box, 4, 7, "WORD COUNT", s_accent2);
 
-    const word_labels = [_][]const u8{ " 10", " 25", " 50", "100", "200" };
-    for (0..5) |i| {
-        const row: u16 = @as(u16, @intCast(i)) + 7;
+    const word_labels = [_][]const u8{ "10", "25", "50", "100", "200", "500" };
+    for (0..6) |i| {
+        const row: u16 = @as(u16, @intCast(i)) + 8;
         const selected = (i == cursor);
         if (selected) {
             fillRow(box, row, .{ .bg = c_mid });
-            print1(box, 3, row, ">", s_accent_bold);
-            print1(box, 5, row, word_labels[i], .{ .fg = c_gold, .bg = c_mid, .bold = true });
-            print1(box, 8, row, " words", .{ .fg = c_white, .bg = c_mid, .bold = true });
+            print1(box, 4, row, ">", s_accent_bold);
+            print1(box, 6, row, word_labels[i], .{ .fg = c_gold, .bg = c_mid, .bold = true });
+            print1(box, 6 + @as(u16, @intCast(word_labels[i].len)), row, " words", .{ .fg = c_white, .bg = c_mid, .bold = true });
         } else {
-            print1(box, 5, row, word_labels[i], s_dim);
-            print1(box, 8, row, " words", s_dim);
+            print1(box, 6, row, word_labels[i], s_dim);
+            print1(box, 6 + @as(u16, @intCast(word_labels[i].len)), row, " words", s_dim);
         }
     }
 
     // ── TIMED section ───────────────────────────────────────────────────────
-    print1(box, 3, 13, "TIMED", s_accent2);
+    print1(box, 4, 15, "TIMED", s_accent2);
 
-    const time_labels = [_][]const u8{ "15", "30", "60" };
-    for (0..3) |i| {
-        const row: u16 = @as(u16, @intCast(i)) + 14;
-        const mode_idx = i + 5;
-        const selected = (mode_idx == cursor);
+    const time_labels = [_][]const u8{ "15", "30", "60", "120" };
+    for (0..4) |i| {
+        const row: u16 = @as(u16, @intCast(i)) + 16;
+        const selected = (i + 6 == cursor);
         if (selected) {
             fillRow(box, row, .{ .bg = c_mid });
-            print1(box, 3, row, ">", s_accent_bold);
-            print1(box, 5, row, time_labels[i], .{ .fg = c_gold, .bg = c_mid, .bold = true });
-            print1(box, 5 + @as(u16, @intCast(time_labels[i].len)), row, " seconds", .{ .fg = c_white, .bg = c_mid, .bold = true });
+            print1(box, 4, row, ">", s_accent_bold);
+            print1(box, 6, row, time_labels[i], .{ .fg = c_gold, .bg = c_mid, .bold = true });
+            print1(box, 6 + @as(u16, @intCast(time_labels[i].len)), row, " seconds", .{ .fg = c_white, .bg = c_mid, .bold = true });
         } else {
-            print1(box, 5, row, time_labels[i], s_dim);
-            print1(box, 5 + @as(u16, @intCast(time_labels[i].len)), row, " seconds", s_dim);
+            print1(box, 6, row, time_labels[i], s_dim);
+            print1(box, 6 + @as(u16, @intCast(time_labels[i].len)), row, " seconds", s_dim);
         }
     }
 
     // ── Bottom separator ────────────────────────────────────────────────────
-    drawSep(box, 0, 17, box.width);
+    drawSep(box, 0, 21, box.width);
 
     // ── Help text ───────────────────────────────────────────────────────────
-    print1(box, 3, 18, "j/k", s_accent);
-    print1(box, 6, 18, " navigate", s_dim);
-    print1(box, 17, 18, "|", s_dim2);
-    print1(box, 19, 18, "h/l", s_accent);
-    print1(box, 22, 18, " difficulty", s_dim);
-    print1(box, 3, 19, "Enter", s_accent);
-    print1(box, 8, 19, " start", s_dim);
-    print1(box, 17, 19, "|", s_dim2);
-    print1(box, 19, 19, "Esc", s_accent);
-    print1(box, 22, 19, " quit", s_dim);
+    print1(box, 4, 22, "j/k", s_accent);
+    print1(box, 7, 22, "mode", s_dim);
+    print1(box, 14, 22, "|", s_dim2);
+    print1(box, 16, 22, "w/s", s_accent);
+    print1(box, 20, 22, "category", s_dim);
+    print1(box, 4, 23, "h/l", s_accent);
+    print1(box, 7, 23, "difficulty", s_dim);
+    print1(box, 19, 23, "|", s_dim2);
+    print1(box, 21, 23, "Enter", s_accent);
+    print1(box, 27, 23, "start", s_dim);
+    print1(box, 4, 24, "Esc", s_accent);
+    print1(box, 8, 24, "quit", s_dim);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -290,29 +298,40 @@ pub fn drawMenu(win: Window, cursor: usize, diff_cursor: usize, frame: u32) void
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub fn drawTyping(win: Window, game: *const Game) void {
-    if (win.width < 20 or win.height < 8) return;
+    if (win.width < 25 or win.height < 10) return;
 
-    const mx: u16 = 3;
+    const mx: u16 = 4;
     const w: u16 = win.width -| mx * 2;
 
-    // ── Header (row 1) ──────────────────────────────────────────────────────
-    print1(win, mx, 1, "KIZAMU", s_accent_bold);
-    print1(win, mx + 8, 1, "|", s_dim2);
+    // ── Header ───────────────────────────────────────────────────────────────
+    // Background for header
+    for (0..win.width) |c| {
+        win.writeCell(@intCast(c), 0, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = c_mid2 } });
+    }
+
+    print1(win, mx, 0, "◈ KIZAMU", s_accent_bold);
+    print1(win, mx + 10, 0, "│", s_dim2);
 
     const mode_label = game.mode.label();
-    print1(win, mx + 10, 1, mode_label, s_dim);
-    const diff_label = game.difficulty.label();
-    print1(win, mx + 10 + @as(u16, @intCast(mode_label.len)) + 1, 1, diff_label, s_magenta);
+    print1(win, mx + 12, 0, mode_label, s_dim);
+    print1(win, mx + 12 + @as(u16, @intCast(mode_label.len)) + 1, 0, "|", s_dim2);
 
-    // ── Live stats (right-aligned on row 1) ─────────────────────────────────
+    const cat_label = words_mod.categoryLabel(game.category);
+    print1(win, mx + 12 + @as(u16, @intCast(mode_label.len)) + 3, 0, cat_label, s_magenta);
+    print1(win, mx + 12 + @as(u16, @intCast(mode_label.len)) + 3 + @as(u16, @intCast(cat_label.len)) + 1, 0, "|", s_dim2);
+
+    const diff_label = game.difficulty.label();
+    print1(win, mx + 12 + @as(u16, @intCast(mode_label.len)) + 3 + @as(u16, @intCast(cat_label.len)) + 3, 0, diff_label, s_white);
+
+    // ── Live stats (right-aligned on header) ─────────────────────────────────
     drawLiveStats(win, game, mx);
 
     // ── Top separator (row 2) ───────────────────────────────────────────────
     drawSep(win, mx, 2, w);
 
-    // ── Word display ────────────────────────────────────────────────────────
+    // ── Word display area ───────────────────────────────────────────────────
     const words_top: u16 = 4;
-    const words_bottom: u16 = win.height -| 4;
+    const words_bottom: u16 = win.height -| 5;
     const words_h: u16 = if (words_bottom > words_top) words_bottom - words_top else 3;
 
     const words_win = win.child(.{
@@ -325,7 +344,7 @@ pub fn drawTyping(win: Window, game: *const Game) void {
     drawWords(words_win, game);
 
     // ── Bottom separator ────────────────────────────────────────────────────
-    drawSep(win, mx, win.height -| 3, w);
+    drawSep(win, mx, win.height -| 4, w);
 
     // ── Footer ──────────────────────────────────────────────────────────────
     drawProgress(win, game, mx, win.height -| 2, w);
@@ -497,7 +516,7 @@ fn drawWords(words_win: Window, game: *const Game) void {
                 } else if (ci == game.input_len) {
                     print1(words_win, colu, vis_row, word[ci .. ci + 1], s_cursor);
                 } else {
-                    print1(words_win, colu, vis_row, word[ci .. ci + 1], s_dim);
+                    print1(words_win, colu, vis_row, word[ci .. ci + 1], s_white);
                 }
             }
             var ei: usize = word.len;
@@ -517,6 +536,12 @@ fn drawWords(words_win: Window, game: *const Game) void {
             print1(words_win, lc, vis_row, word, s_dim);
         }
     }
+
+    // Add a hint about current progress
+    if (game.start_time == null) {
+        const hint_row = if (words_win.height > 1) words_win.height - 1 else 0;
+        print1(words_win, 0, hint_row, "Start typing to begin...", s_dim2);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -524,7 +549,7 @@ fn drawWords(words_win: Window, game: *const Game) void {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub fn drawResults(win: Window, game: *const Game) void {
-    const BOX_W: u16 = 44;
+    const BOX_W: u16 = 50;
     const BOX_H: u16 = 22;
 
     if (win.width < BOX_W + 2 or win.height < BOX_H + 2) return;
@@ -544,116 +569,214 @@ pub fn drawResults(win: Window, game: *const Game) void {
         },
     });
 
-    // ── Title ───────────────────────────────────────────────────────────────
-    print1(box, 2, 1, "[ RESULTS ]", s_gold_bold);
+    // Title row
+    print1(box, 2, 1, "=== RESULTS ===", s_gold_bold);
     const ml = game.mode.label();
     print1(box, box.width -| @as(u16, @intCast(ml.len)) -| 2, 1, ml, s_dim);
 
-    drawSep(box, 0, 2, box.width);
+    const cat_label = words_mod.categoryLabel(game.category);
+    print1(box, 2, 2, cat_label, s_accent2);
 
-    // ── Main stats ──────────────────────────────────────────────────────────
-    const val_col: u16 = 16;
+    drawSep(box, 0, 3, box.width);
+
+    // Main stats - using existing helpers
+    const wpm_val = game.wpm();
+    const raw_val = game.rawWpm();
+    const acc_val = game.accuracy();
 
     // WPM
+    print1(box, 4, 5, "WPM:", s_dim);
     {
-        const v = splitFixed1(game.wpm(), 9999.0);
-        print1(box, 2, 4, "WPM", s_dim);
-        _ = writeFixed1(box, val_col, 4, v.i, v.d, .{ .fg = c_gold, .bold = true });
+        const v = splitFixed1(wpm_val, 9999.0);
+        _ = writeFixed1(box, 10, 5, v.i, v.d, .{ .fg = c_gold, .bold = true });
     }
 
     // Raw WPM
+    print1(box, 4, 6, "Raw:", s_dim);
     {
-        const v = splitFixed1(game.rawWpm(), 9999.0);
-        print1(box, 2, 5, "Raw WPM", s_dim);
-        _ = writeFixed1(box, val_col, 5, v.i, v.d, s_gold2);
+        const v = splitFixed1(raw_val, 9999.0);
+        _ = writeFixed1(box, 10, 6, v.i, v.d, s_gold2);
     }
 
     // Accuracy
+    print1(box, 4, 7, "Accuracy:", s_dim);
     {
-        const v = splitFixed1(game.accuracy(), 100.0);
-        print1(box, 2, 6, "Accuracy", s_dim);
-        const c: u16 = writeFixed1(box, val_col, 6, v.i, v.d, s_correct_b);
-        _ = writeStr(box, val_col + c, 6, "%", s_correct_b);
+        const v = splitFixed1(acc_val, 100.0);
+        const c = writeFixed1(box, 14, 7, v.i, v.d, s_correct_b);
+        print1(box, 14 + c, 7, "%", s_correct_b);
     }
 
     // Time
-    {
-        const elapsed_ms = game.elapsedMs();
-        const t_s: u64 = @intCast(@divTrunc(elapsed_ms, 1000));
-        const t_d: u64 = @intCast(@divTrunc(@rem(elapsed_ms, 1000), 100));
-        print1(box, 2, 7, "Time", s_dim);
-        const c: u16 = writeFixed1(box, val_col, 7, t_s, t_d, s_white);
-        _ = writeStr(box, val_col + c, 7, "s", s_white);
-    }
+    const elapsed_ms = game.elapsedMs();
+    const time_s: u64 = @intCast(@divTrunc(elapsed_ms, 1000));
+    print1(box, 4, 8, "Time:", s_dim);
+    _ = writeU64(box, 10, 8, time_s, s_white);
+    print1(box, 10 + numWidth(time_s), 8, "s", s_white);
 
-    drawSep(box, 0, 9, box.width);
+    drawSep(box, 0, 10, box.width);
 
-    // ── Keystroke details ───────────────────────────────────────────────────
-    print1(box, 2, 10, "Keystrokes", s_accent2);
+    // Keystrokes section
+    print1(box, 4, 11, "KEYSTROKES", s_accent2);
 
-    // Correct / Errors row
-    {
-        print1(box, 2, 11, "Correct", s_dim);
-        _ = writeU64(box, 12, 11, @intCast(game.correct_chars), s_correct);
-        print1(box, 22, 11, "Errors", s_dim);
-        _ = writeU64(box, 31, 11, @intCast(game.incorrect_chars), s_error);
-    }
+    // Correct
+    print1(box, 4, 12, "Correct:", s_dim);
+    _ = writeU64(box, 13, 12, @intCast(game.correct_chars), s_correct);
 
-    // Backspace / Total row
-    {
-        print1(box, 2, 12, "Backspace", s_dim);
-        _ = writeU64(box, 12, 12, @intCast(game.backspace_count), s_dim);
-        print1(box, 22, 12, "Total", s_dim);
-        _ = writeU64(box, 31, 12, @intCast(game.totalKeystrokes()), s_white);
-    }
+    // Errors
+    print1(box, 25, 12, "Errors:", s_dim);
+    _ = writeU64(box, 33, 12, @intCast(game.incorrect_chars), s_error);
 
-    // Words correct
-    {
-        const cw = game.correctWords();
-        const tw = game.current_word;
-        print1(box, 2, 13, "Words", s_dim);
-        var c: u16 = writeU64(box, 12, 13, @intCast(cw), s_white);
-        c += writeStr(box, 12 + c, 13, "/", s_dim);
-        _ = writeU64(box, 12 + c, 13, @intCast(tw), s_dim);
-    }
+    // Backspace
+    print1(box, 4, 13, "Backspace:", s_dim);
+    _ = writeU64(box, 14, 13, @intCast(game.backspace_count), s_dim);
 
-    drawSep(box, 0, 15, box.width);
+    // Total
+    print1(box, 25, 13, "Total:", s_dim);
+    _ = writeU64(box, 32, 13, @intCast(game.totalKeystrokes()), s_white);
 
-    // ── Most missed characters ──────────────────────────────────────────────
+    // Words
+    print1(box, 4, 14, "Words:", s_dim);
+    const cw = game.correctWords();
+    const tw = game.current_word;
+    _ = writeU64(box, 11, 14, @intCast(cw), s_white);
+    print1(box, 11 + numWidth(@intCast(cw)), 14, "/", s_dim);
+    _ = writeU64(box, 11 + numWidth(@intCast(cw)) + 1, 14, @intCast(tw), s_dim);
+
+    drawSep(box, 0, 16, box.width);
+
+    // Error characters
     {
         var errors: [5]game_mod.CharError = undefined;
         const n = game.topErrors(&errors);
         if (n == 0) {
-            print1(box, 2, 16, "No errors - perfect!", s_correct);
+            print1(box, 4, 17, "No errors - perfect!", s_correct_bold);
         } else {
-            var c: u16 = writeStr(box, 2, 16, "Most missed: ", s_dim);
-            c += 2;
+            print1(box, 4, 17, "Missed:", s_dim);
+            var c: u16 = 12;
             for (0..n) |i| {
                 if (i > 0) {
-                    c += writeStr(box, c, 16, " ", s_dim);
+                    print1(box, c, 17, " ", s_dim);
+                    c += 1;
                 }
-                // Write char using static ASCII grapheme
-                box.writeCell(c, 16, .{
-                    .char = .{ .grapheme = asciiG(errors[i].char), .width = 1 },
-                    .style = .{ .fg = c_error, .bold = true },
-                });
+                print1(box, c, 17, &[_]u8{errors[i].char}, .{ .fg = c_error, .bold = true });
                 c += 1;
-                c += writeStr(box, c, 16, "(", s_dim);
-                c += writeU64(box, c, 16, errors[i].count, s_white);
-                c += writeStr(box, c, 16, ")", s_dim);
+                print1(box, c, 17, "(", s_dim);
+                c += 1;
+                c += writeU64(box, c, 17, errors[i].count, s_white);
+                print1(box, c, 17, ")", s_dim);
+                c += 1;
             }
         }
     }
 
-    drawSep(box, 0, 18, box.width);
+    drawSep(box, 0, 19, box.width);
 
-    // ── Actions ─────────────────────────────────────────────────────────────
-    print1(box, 2, 19, "[Enter]", s_key);
-    print1(box, 10, 19, "again", s_dim);
-    print1(box, 17, 19, "|", s_dim2);
-    print1(box, 19, 19, "[Tab]", s_key);
-    print1(box, 25, 19, "menu", s_dim);
-    print1(box, 31, 19, "|", s_dim2);
-    print1(box, 33, 19, "[Esc]", s_key);
-    print1(box, 39, 19, "quit", s_dim);
+    // Actions
+    print1(box, 4, 20, "[Enter]", s_key);
+    print1(box, 12, 20, "again", s_dim);
+    print1(box, 20, 20, "|", s_dim2);
+    print1(box, 22, 20, "[Tab]", s_key);
+    print1(box, 28, 20, "menu", s_dim);
+    print1(box, 34, 20, "|", s_dim2);
+    print1(box, 36, 20, "[Esc]", s_key);
+    print1(box, 42, 20, "quit", s_dim);
+}
+
+// Helper to print float as string
+fn printFloat(val: f64) []const u8 {
+    var buf: [16]u8 = undefined;
+    if (val < 0 or !std.math.isFinite(val)) {
+        return "0";
+    }
+    const int_part: u64 = @intFromFloat(@floor(val));
+    const frac_part: u64 = @intCast(@floor((val - @as(f64, @floatFromInt(int_part))) * 10));
+
+    var i: usize = 0;
+    var v = int_part;
+    if (int_part == 0) {
+        buf[0] = '0';
+        i = 1;
+    } else {
+        var temp: [16]u8 = undefined;
+        var len: usize = 0;
+        while (v > 0) {
+            temp[len] = v % 10 + '0';
+            len += 1;
+            v /= 10;
+        }
+        var j: usize = 0;
+        while (j < len) {
+            buf[i] = temp[len - 1 - j];
+            i += 1;
+            j += 1;
+        }
+    }
+    buf[i] = '.';
+    i += 1;
+    buf[i] = @intCast(frac_part + '0');
+    i += 1;
+    return buf[0..i];
+}
+
+// Helper to print percent
+fn printPercent(val: f64) []const u8 {
+    var buf: [16]u8 = undefined;
+    const int_val: u64 = @intFromFloat(@round(val));
+    var i: usize = 0;
+    var v = int_val;
+    if (int_val == 0) {
+        buf[0] = '0';
+        i = 1;
+    } else {
+        var temp: [16]u8 = undefined;
+        var len: usize = 0;
+        while (v > 0) {
+            temp[len] = v % 10 + '0';
+            len += 1;
+            v /= 10;
+        }
+        var j: usize = 0;
+        while (j < len) {
+            buf[i] = temp[len - 1 - j];
+            i += 1;
+            j += 1;
+        }
+    }
+    buf[i] = '%';
+    i += 1;
+    return buf[0..i];
+}
+
+// Helper to print integer
+fn printInt(val: u64) []const u8 {
+    var buf: [16]u8 = undefined;
+    var i: usize = 0;
+    var v = val;
+    if (val == 0) {
+        buf[0] = '0';
+        return buf[0..1];
+    }
+    var temp: [16]u8 = undefined;
+    var len: usize = 0;
+    while (v > 0) {
+        temp[len] = @intCast(v % 10 + '0');
+        len += 1;
+        v /= 10;
+    }
+    var j: usize = 0;
+    while (j < len) {
+        buf[i] = temp[len - 1 - j];
+        i += 1;
+        j += 1;
+    }
+    return buf[0..i];
+}
+
+// Get width of integer
+fn intWidth(val: u64) u16 {
+    if (val == 0) return 1;
+    var w: u16 = 0;
+    var v = val;
+    while (v > 0) : (w += 1) v /= 10;
+    return w;
 }

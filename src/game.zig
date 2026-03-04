@@ -3,8 +3,9 @@ const std = @import("std");
 const words_mod = @import("words.zig");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-pub const MAX_WORDS = 200;
+pub const MAX_WORDS = 500;
 pub const MAX_INPUT = 64;
+pub const MAX_CATEGORY = 4;
 
 // ─── Difficulty ──────────────────────────────────────────────────────────────
 pub const Difficulty = enum {
@@ -24,7 +25,7 @@ pub const Difficulty = enum {
         return switch (self) {
             .easy => 100,
             .medium => 300,
-            .hard => words_mod.word_list.len,
+            .hard => words_mod.common_words.len,
         };
     }
 };
@@ -38,13 +39,15 @@ pub const GameMode = enum {
     words_50,
     words_100,
     words_200,
+    words_500,
     timed_15,
     timed_30,
     timed_60,
+    timed_120,
 
     pub fn isTimed(self: GameMode) bool {
         return switch (self) {
-            .timed_15, .timed_30, .timed_60 => true,
+            .timed_15, .timed_30, .timed_60, .timed_120 => true,
             else => false,
         };
     }
@@ -54,6 +57,7 @@ pub const GameMode = enum {
             .timed_15 => 15_000,
             .timed_30 => 30_000,
             .timed_60 => 60_000,
+            .timed_120 => 120_000,
             else => 0,
         };
     }
@@ -65,7 +69,8 @@ pub const GameMode = enum {
             .words_50 => 50,
             .words_100 => 100,
             .words_200 => 200,
-            .timed_15, .timed_30, .timed_60 => MAX_WORDS,
+            .words_500 => 500,
+            .timed_15, .timed_30, .timed_60, .timed_120 => MAX_WORDS,
         };
     }
 
@@ -76,16 +81,18 @@ pub const GameMode = enum {
             .words_50 => "50 words",
             .words_100 => "100 words",
             .words_200 => "200 words",
+            .words_500 => "500 words",
             .timed_15 => "15 seconds",
             .timed_30 => "30 seconds",
             .timed_60 => "60 seconds",
+            .timed_120 => "120 seconds",
         };
     }
 };
 
 pub const ALL_MODES = [_]GameMode{
-    .words_10, .words_25, .words_50, .words_100, .words_200,
-    .timed_15, .timed_30, .timed_60,
+    .words_10, .words_25, .words_50, .words_100, .words_200, .words_500,
+    .timed_15, .timed_30, .timed_60, .timed_120,
 };
 
 // ─── Simple LCG RNG ──────────────────────────────────────────────────────────
@@ -127,6 +134,10 @@ pub const Game = struct {
     end_time: ?i64 = null,
     mode: GameMode = .words_25,
     difficulty: Difficulty = .medium,
+    category: words_mod.Category = .common,
+    streak: usize = 0,
+    best_wpm: f64 = 0.0,
+    best_accuracy: f64 = 0.0,
 
     pub fn reset(self: *Game, m: GameMode, diff: Difficulty) void {
         self.mode = m;
@@ -145,9 +156,17 @@ pub const Game = struct {
 
         var rng = Rng.init();
         const pool = diff.poolSize();
+        const word_list = words_mod.getWordList(self.category);
+        const pool_len = word_list.len;
+        const actual_pool = if (pool > pool_len) pool_len else pool;
         for (0..self.word_count) |i| {
-            self.words[i] = words_mod.word_list[rng.lessThan(pool)];
+            self.words[i] = word_list[rng.lessThan(actual_pool)];
         }
+    }
+
+    pub fn resetWithCategory(self: *Game, m: GameMode, diff: Difficulty, cat: words_mod.Category) void {
+        self.category = cat;
+        self.reset(m, diff);
     }
 
     /// Milliseconds elapsed since start (or since end if finished).

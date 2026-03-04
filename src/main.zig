@@ -3,6 +3,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const game_m = @import("game.zig");
+const words_mod = @import("words.zig");
 const render = @import("render.zig");
 
 const AppState = enum { menu, typing, results };
@@ -46,8 +47,9 @@ pub fn main() !void {
 
     var game = game_m.Game{};
     var state = AppState.menu;
-    var menu_cursor: usize = 0;
+    var menu_cursor: usize = 1; // default: 25 words
     var diff_cursor: usize = 1; // default: Medium
+    var cat_cursor: usize = 0; // default: Common
     var anim_frame: u32 = 0;
 
     // Spawn background ticker for animation and timers (80ms interval).
@@ -96,43 +98,62 @@ pub fn main() !void {
                             if (diff_cursor < game_m.ALL_DIFFICULTIES.len - 1) diff_cursor += 1;
                         }
 
+                        // Navigate category (w/s / shift+left/right)
+                        if (key.matches('w', .{}) or key.matches(vaxis.Key.page_up, .{})) {
+                            if (cat_cursor > 0) cat_cursor -= 1;
+                        }
+                        if (key.matches('s', .{}) or key.matches(vaxis.Key.page_down, .{})) {
+                            if (cat_cursor < words_mod.ALL_CATEGORIES.len - 1) cat_cursor += 1;
+                        }
+
                         // Start game
                         if (key.matches(vaxis.Key.enter, .{})) {
-                            game.reset(game_m.ALL_MODES[menu_cursor], game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            const mode = game_m.ALL_MODES[menu_cursor];
+                            const diff = game_m.ALL_DIFFICULTIES[diff_cursor];
+                            const cat = words_mod.ALL_CATEGORIES[cat_cursor];
+                            game.resetWithCategory(mode, diff, cat);
                             state = .typing;
                         }
 
                         // Quick-start shortcuts
                         if (key.matches('1', .{})) {
-                            game.reset(.words_10, game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            game.resetWithCategory(.words_10, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
                             state = .typing;
                         }
                         if (key.matches('2', .{})) {
-                            game.reset(.words_25, game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            game.resetWithCategory(.words_25, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
                             state = .typing;
                         }
                         if (key.matches('3', .{})) {
-                            game.reset(.words_50, game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            game.resetWithCategory(.words_50, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
                             state = .typing;
                         }
                         if (key.matches('4', .{})) {
-                            game.reset(.words_100, game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            game.resetWithCategory(.words_100, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
                             state = .typing;
                         }
                         if (key.matches('5', .{})) {
-                            game.reset(.words_200, game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            game.resetWithCategory(.words_200, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
                             state = .typing;
                         }
                         if (key.matches('6', .{})) {
-                            game.reset(.timed_15, game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            game.resetWithCategory(.words_500, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
                             state = .typing;
                         }
                         if (key.matches('7', .{})) {
-                            game.reset(.timed_30, game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            game.resetWithCategory(.timed_15, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
                             state = .typing;
                         }
                         if (key.matches('8', .{})) {
-                            game.reset(.timed_60, game_m.ALL_DIFFICULTIES[diff_cursor]);
+                            game.resetWithCategory(.timed_30, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
+                            state = .typing;
+                        }
+                        if (key.matches('9', .{})) {
+                            game.resetWithCategory(.timed_60, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
+                            state = .typing;
+                        }
+                        if (key.matches('0', .{})) {
+                            game.resetWithCategory(.timed_120, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
                             state = .typing;
                         }
                     },
@@ -176,7 +197,7 @@ pub fn main() !void {
         win.hideCursor();
 
         switch (state) {
-            .menu => render.drawMenu(win, menu_cursor, diff_cursor, anim_frame),
+            .menu => render.drawMenu(win, menu_cursor, diff_cursor, cat_cursor, anim_frame),
             .typing => render.drawTyping(win, &game),
             .results => render.drawResults(win, &game),
         }
