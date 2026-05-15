@@ -16,28 +16,26 @@ const Event = union(enum) {
     focus_out,
 };
 
-/// Background thread: fires a tick event every ~80ms for animation and timers.
 fn tickThread(loop: *vaxis.Loop(Event), running: *std.atomic.Value(bool)) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = 80 * std.time.ns_per_ms };
     while (running.load(.acquire)) {
-        std.Thread.sleep(80 * std.time.ns_per_ms);
-        loop.postEvent(.{ .tick = {} });
+        _ = std.os.linux.clock_nanosleep(.MONOTONIC, .{ .ABSTIME = false }, &req, null);
+        loop.postEvent(.{ .tick = {} }) catch {};
     }
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     var tty_buf: [4096 * 4]u8 = undefined;
-    var tty = try vaxis.Tty.init(&tty_buf);
+    var tty = try vaxis.Tty.init(io, &tty_buf);
     defer tty.deinit();
 
-    var vx = try vaxis.init(allocator, .{});
+    var vx = try vaxis.init(io, allocator, init.environ_map, .{});
     defer vx.deinit(allocator, tty.writer());
 
-    var loop: vaxis.Loop(Event) = .{ .tty = &tty, .vaxis = &vx };
-    try loop.init();
+    var loop: vaxis.Loop(Event) = .init(io, &tty, &vx);
     try loop.start();
     defer loop.stop();
 
@@ -47,12 +45,12 @@ pub fn main() !void {
 
     var game = game_m.Game{};
     var state = AppState.menu;
-    var menu_cursor: usize = 1; // default: 25 words
-    var diff_cursor: usize = 1; // default: Medium
-    var cat_cursor: usize = 0; // default: Common
+    var menu_cursor: usize = 1;   // default: 25 words
+    var diff_cursor: usize = 1;   // default: Medium
+    var cat_cursor: usize = 0;    // default: Common
+    var theme_idx: usize = 0;     // default: Tokyo Night
     var anim_frame: u32 = 0;
 
-    // Spawn background ticker for animation and timers (80ms interval).
     var running = std.atomic.Value(bool).init(true);
     const tick_thread = try std.Thread.spawn(.{}, tickThread, .{ &loop, &running });
     defer {
@@ -61,28 +59,33 @@ pub fn main() !void {
     }
 
     outer: while (true) {
-        const event = loop.nextEvent();
+        const event = try loop.nextEvent();
 
         switch (event) {
             .winsize => |ws| try vx.resize(allocator, tty.writer(), ws),
             .tick => {
                 anim_frame +%= 1;
-                // Check timed-mode expiry
                 if (state == .typing and game.mode.isTimed() and game.start_time != null) {
                     if (game.isTimeUp()) {
-                        game.end_time = game.start_time.? + game.mode.timeLimitMs();
+                        game.end_time = game_m.milliTimestamp();
+                        game.recordSession();
                         state = .results;
                     }
                 }
             },
             .key_press => |key| {
+                // Theme cycling works in all states
+                if (key.matches('t', .{})) {
+                    theme_idx = (theme_idx + 1) % render.THEME_COUNT;
+                }
+
                 switch (state) {
-                    // ── Menu ─────────────────────────────────────────────
+                    // ── Menu ───────────────────────────────────────────────
                     .menu => {
                         if (key.matches('c', .{ .ctrl = true })) break :outer;
                         if (key.matches(vaxis.Key.escape, .{})) break :outer;
 
-                        // Navigate modes (j/k / up/down)
+                        // Navigate modes
                         if (key.matches(vaxis.Key.up, .{}) or key.matches('k', .{})) {
                             if (menu_cursor > 0) menu_cursor -= 1;
                         }
@@ -90,7 +93,7 @@ pub fn main() !void {
                             if (menu_cursor < game_m.ALL_MODES.len - 1) menu_cursor += 1;
                         }
 
-                        // Navigate difficulty (h/l / left/right)
+                        // Navigate difficulty
                         if (key.matches(vaxis.Key.left, .{}) or key.matches('h', .{})) {
                             if (diff_cursor > 0) diff_cursor -= 1;
                         }
@@ -98,7 +101,7 @@ pub fn main() !void {
                             if (diff_cursor < game_m.ALL_DIFFICULTIES.len - 1) diff_cursor += 1;
                         }
 
-                        // Navigate category (w/s / shift+left/right)
+                        // Navigate category
                         if (key.matches('w', .{}) or key.matches(vaxis.Key.page_up, .{})) {
                             if (cat_cursor > 0) cat_cursor -= 1;
                         }
@@ -115,50 +118,25 @@ pub fn main() !void {
                             state = .typing;
                         }
 
-                        // Quick-start shortcuts
-                        if (key.matches('1', .{})) {
-                            game.resetWithCategory(.words_10, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('2', .{})) {
-                            game.resetWithCategory(.words_25, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('3', .{})) {
-                            game.resetWithCategory(.words_50, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('4', .{})) {
-                            game.resetWithCategory(.words_100, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('5', .{})) {
-                            game.resetWithCategory(.words_200, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('6', .{})) {
-                            game.resetWithCategory(.words_500, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('7', .{})) {
-                            game.resetWithCategory(.timed_15, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('8', .{})) {
-                            game.resetWithCategory(.timed_30, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('9', .{})) {
-                            game.resetWithCategory(.timed_60, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
-                        if (key.matches('0', .{})) {
-                            game.resetWithCategory(.timed_120, game_m.ALL_DIFFICULTIES[diff_cursor], words_mod.ALL_CATEGORIES[cat_cursor]);
-                            state = .typing;
-                        }
+                        // Quick-start: word count modes (1-6)
+                        if (key.matches('1', .{})) startGame(&game, &state, .words_10,  diff_cursor, cat_cursor);
+                        if (key.matches('2', .{})) startGame(&game, &state, .words_25,  diff_cursor, cat_cursor);
+                        if (key.matches('3', .{})) startGame(&game, &state, .words_50,  diff_cursor, cat_cursor);
+                        if (key.matches('4', .{})) startGame(&game, &state, .words_100, diff_cursor, cat_cursor);
+                        if (key.matches('5', .{})) startGame(&game, &state, .words_200, diff_cursor, cat_cursor);
+                        if (key.matches('6', .{})) startGame(&game, &state, .words_500, diff_cursor, cat_cursor);
+                        // Quick-start: timed modes (7-0)
+                        if (key.matches('7', .{})) startGame(&game, &state, .timed_15,  diff_cursor, cat_cursor);
+                        if (key.matches('8', .{})) startGame(&game, &state, .timed_30,  diff_cursor, cat_cursor);
+                        if (key.matches('9', .{})) startGame(&game, &state, .timed_60,  diff_cursor, cat_cursor);
+                        if (key.matches('0', .{})) startGame(&game, &state, .timed_120, diff_cursor, cat_cursor);
+                        // Quick-start: challenge modes
+                        if (key.matches('z', .{})) startGame(&game, &state, .zen,           diff_cursor, cat_cursor);
+                        if (key.matches('d', .{})) startGame(&game, &state, .sudden_death,  diff_cursor, cat_cursor);
+                        if (key.matches('a', .{})) startGame(&game, &state, .accuracy_rush, diff_cursor, cat_cursor);
                     },
 
-                    // ── Typing ───────────────────────────────────────────
+                    // ── Typing ─────────────────────────────────────────────
                     .typing => {
                         if (key.matches('c', .{ .ctrl = true })) break :outer;
                         if (key.matches(vaxis.Key.escape, .{})) {
@@ -175,7 +153,7 @@ pub fn main() !void {
                         }
                     },
 
-                    // ── Results ──────────────────────────────────────────
+                    // ── Results ────────────────────────────────────────────
                     .results => {
                         if (key.matches('c', .{ .ctrl = true })) break :outer;
                         if (key.matches(vaxis.Key.escape, .{})) break :outer;
@@ -197,13 +175,20 @@ pub fn main() !void {
         win.hideCursor();
 
         switch (state) {
-            .menu => render.drawMenu(win, menu_cursor, diff_cursor, cat_cursor, anim_frame),
-            .typing => render.drawTyping(win, &game),
-            .results => render.drawResults(win, &game),
+            .menu    => render.drawMenu(win, menu_cursor, diff_cursor, cat_cursor, theme_idx, anim_frame),
+            .typing  => render.drawTyping(win, &game, theme_idx),
+            .results => render.drawResults(win, &game, theme_idx),
         }
 
         try vx.render(tty.writer());
     }
+}
+
+fn startGame(game: *game_m.Game, state: *AppState, mode: game_m.GameMode, diff_cursor: usize, cat_cursor: usize) void {
+    const diff = game_m.ALL_DIFFICULTIES[diff_cursor];
+    const cat = words_mod.ALL_CATEGORIES[cat_cursor];
+    game.resetWithCategory(mode, diff, cat);
+    state.* = .typing;
 }
 
 fn handleBackspace(game: *game_m.Game) void {
@@ -224,17 +209,39 @@ fn handleBackspace(game: *game_m.Game) void {
 
 fn handleChar(game: *game_m.Game, c: u8, state: *AppState) void {
     if (game.start_time == null) {
-        game.start_time = std.time.milliTimestamp();
+        game.start_time = game_m.milliTimestamp();
     }
     if (c == ' ') {
         game.total_chars_typed += 1;
-        game.finishWord();
+        const word_ok = game.finishWord();
+
+        // Sudden death: wrong word ends the game
+        if (game.mode == .sudden_death and !word_ok) {
+            game.end_time = game_m.milliTimestamp();
+            game.over_reason = .sudden_death;
+            game.recordSession();
+            state.* = .results;
+            return;
+        }
+
+        // Accuracy rush: low accuracy ends the game
+        if (game.isAccuracyFailed()) {
+            game.end_time = game_m.milliTimestamp();
+            game.over_reason = .accuracy_fail;
+            game.recordSession();
+            state.* = .results;
+            return;
+        }
+
+        // Zen: never ends on word count (completes at 500 words like others)
         if (game.current_word >= game.word_count) {
-            game.end_time = std.time.milliTimestamp();
+            game.end_time = game_m.milliTimestamp();
+            game.recordSession();
             state.* = .results;
         }
         return;
     }
+
     if (game.input_len >= game_m.MAX_INPUT) return;
     game.total_chars_typed += 1;
     const word = game.words[game.current_word];
