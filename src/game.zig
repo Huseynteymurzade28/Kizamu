@@ -13,6 +13,8 @@ pub const MAX_WORDS = 500;
 pub const MAX_INPUT = 64;
 pub const WPM_HISTORY = 48;
 pub const ACCURACY_RUSH_THRESHOLD: f64 = 85.0;
+// Rolling window of recent keystroke timestamps used for the live speed gauge.
+pub const SPEED_WINDOW = 14;
 
 // ─── Difficulty ───────────────────────────────────────────────────────────────
 pub const Difficulty = enum {
@@ -57,6 +59,7 @@ pub const GameMode = enum {
     zen,
     sudden_death,
     accuracy_rush,
+    reverse,
 
     pub fn isTimed(self: GameMode) bool {
         return switch (self) {
@@ -68,9 +71,14 @@ pub const GameMode = enum {
 
     pub fn isChallenge(self: GameMode) bool {
         return switch (self) {
-            .zen, .sudden_death, .accuracy_rush => true,
+            .zen, .sudden_death, .accuracy_rush, .reverse => true,
             else => false,
         };
+    }
+
+    /// Words are displayed (and must be typed) reversed.
+    pub fn isReversed(self: GameMode) bool {
+        return self == .reverse;
     }
 
     pub fn timeLimitMs(self: GameMode) i64 {
@@ -92,6 +100,7 @@ pub const GameMode = enum {
             .words_50 => 50,
             .words_100 => 100,
             .words_200 => 200,
+            .reverse => 25,
             else => MAX_WORDS,
         };
     }
@@ -111,6 +120,7 @@ pub const GameMode = enum {
             .zen => "Zen",
             .sudden_death => "Sudden Death",
             .accuracy_rush => "Accuracy Rush",
+            .reverse => "Reverse",
         };
     }
 
@@ -119,6 +129,7 @@ pub const GameMode = enum {
             .zen => "endless flow, no pressure",
             .sudden_death => "wrong word = game over  [30s]",
             .accuracy_rush => "<85% accuracy = over  [60s]",
+            .reverse => "words appear backwards!",
             else => "",
         };
     }
@@ -127,7 +138,7 @@ pub const GameMode = enum {
 pub const ALL_MODES = [_]GameMode{
     .words_10,    .words_25, .words_50,      .words_100, .words_200,   .words_500,
     .timed_15,    .timed_30, .timed_60,      .timed_120,
-    .zen,         .sudden_death,             .accuracy_rush,
+    .zen,         .sudden_death,             .accuracy_rush,           .reverse,
 };
 
 // ─── Simple LCG RNG ───────────────────────────────────────────────────────────
@@ -179,6 +190,14 @@ pub const Game = struct {
     // Session stats (persist across resets)
     session_best_wpm: f64 = 0.0,
     session_games: u32 = 0,
+    new_best: bool = false,
+    // Live typing feel: rolling keystroke times + correct-char streak
+    ks_times: [SPEED_WINDOW]i64 = .{0} ** SPEED_WINDOW,
+    ks_total: usize = 0,
+    streak: usize = 0,
+    best_streak: usize = 0,
+    // Backing storage for transformed words (reverse mode)
+    word_storage: [MAX_WORDS][MAX_INPUT]u8 = undefined,
 
     pub fn reset(self: *Game, m: GameMode, diff: Difficulty) void {
         self.mode = m;
@@ -197,14 +216,26 @@ pub const Game = struct {
         self.wpm_samples = .{0} ** WPM_HISTORY;
         self.wpm_sample_count = 0;
         self.over_reason = .normal;
+        self.ks_times = .{0} ** SPEED_WINDOW;
+        self.ks_total = 0;
+        self.streak = 0;
+        self.best_streak = 0;
 
         var rng = Rng.init();
         const pool = diff.poolSize();
         const word_list = words_mod.getWordList(self.category);
         const pool_len = word_list.len;
         const actual_pool = if (pool > pool_len) pool_len else pool;
+        const reversed = m.isReversed();
         for (0..self.word_count) |i| {
-            self.words[i] = word_list[rng.lessThan(actual_pool)];
+            const src = word_list[rng.lessThan(actual_pool)];
+            if (reversed) {
+                const len = @min(src.len, MAX_INPUT);
+                for (0..len) |k| self.word_storage[i][k] = src[len - 1 - k];
+                self.words[i] = self.word_storage[i][0..len];
+            } else {
+                self.words[i] = src;
+            }
         }
     }
 
@@ -366,7 +397,41 @@ pub const Game = struct {
 
     pub fn recordSession(self: *Game) void {
         const w = self.wpm();
+        self.new_best = (self.session_games > 0) and (w > self.session_best_wpm);
         if (w > self.session_best_wpm) self.session_best_wpm = w;
         self.session_games += 1;
+    }
+
+    /// Record a keystroke timestamp into the rolling window.
+    pub fn recordKeystroke(self: *Game, now: i64) void {
+        self.ks_times[self.ks_total % SPEED_WINDOW] = now;
+        self.ks_total += 1;
+    }
+
+    /// Instantaneous WPM estimated from the most recent keystrokes.
+    /// Decays toward zero while the keyboard is idle.
+    pub fn instantWpm(self: *const Game) f64 {
+        const n = @min(self.ks_total, SPEED_WINDOW);
+        if (n < 2) return 0;
+        const newest = self.ks_times[(self.ks_total - 1) % SPEED_WINDOW];
+        const oldest = self.ks_times[(self.ks_total - n) % SPEED_WINDOW];
+        const now = milliTimestamp();
+        // If the keyboard went quiet, stretch the window so speed fades out.
+        const eff_newest = if (now - newest > 350) now else newest;
+        const span = eff_newest - oldest;
+        if (span <= 0) return 0;
+        const chars: f64 = @floatFromInt(n - 1);
+        const minutes: f64 = @as(f64, @floatFromInt(span)) / 60_000.0;
+        return (chars / minutes) / 5.0;
+    }
+
+    /// Register whether the just-typed character was correct, for the streak meter.
+    pub fn noteChar(self: *Game, correct: bool) void {
+        if (correct) {
+            self.streak += 1;
+            if (self.streak > self.best_streak) self.best_streak = self.streak;
+        } else {
+            self.streak = 0;
+        }
     }
 };

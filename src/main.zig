@@ -134,6 +134,7 @@ pub fn main(init: std.process.Init) !void {
                         if (key.matches('z', .{})) startGame(&game, &state, .zen,           diff_cursor, cat_cursor);
                         if (key.matches('d', .{})) startGame(&game, &state, .sudden_death,  diff_cursor, cat_cursor);
                         if (key.matches('a', .{})) startGame(&game, &state, .accuracy_rush, diff_cursor, cat_cursor);
+                        if (key.matches('x', .{})) startGame(&game, &state, .reverse,       diff_cursor, cat_cursor);
                     },
 
                     // ── Typing ─────────────────────────────────────────────
@@ -176,8 +177,8 @@ pub fn main(init: std.process.Init) !void {
 
         switch (state) {
             .menu    => render.drawMenu(win, menu_cursor, diff_cursor, cat_cursor, theme_idx, anim_frame),
-            .typing  => render.drawTyping(win, &game, theme_idx),
-            .results => render.drawResults(win, &game, theme_idx),
+            .typing  => render.drawTyping(win, &game, theme_idx, anim_frame),
+            .results => render.drawResults(win, &game, theme_idx, anim_frame),
         }
 
         try vx.render(tty.writer());
@@ -208,9 +209,11 @@ fn handleBackspace(game: *game_m.Game) void {
 }
 
 fn handleChar(game: *game_m.Game, c: u8, state: *AppState) void {
+    const now = game_m.milliTimestamp();
     if (game.start_time == null) {
-        game.start_time = game_m.milliTimestamp();
+        game.start_time = now;
     }
+    game.recordKeystroke(now);
     if (c == ' ') {
         game.total_chars_typed += 1;
         const word_ok = game.finishWord();
@@ -248,12 +251,15 @@ fn handleChar(game: *game_m.Game, c: u8, state: *AppState) void {
     if (game.input_len < word.len) {
         if (c == word[game.input_len]) {
             game.correct_chars += 1;
+            game.noteChar(true);
         } else {
             game.incorrect_chars += 1;
             game.char_errors[word[game.input_len]] += 1;
+            game.noteChar(false);
         }
     } else {
         game.incorrect_chars += 1;
+        game.noteChar(false);
     }
     game.input_buf[game.input_len] = c;
     game.input_len += 1;

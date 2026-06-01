@@ -21,10 +21,13 @@ experience with full 24-bit colour support.
 | Feature                | Description                                                                          |
 | ---------------------- | ------------------------------------------------------------------------------------ |
 | **Word & Timed modes** | Choose between 10 / 25 / 50 / 100 / 200 word tests or 15 / 30 / 60 second timed runs |
+| **Categories**         | Common Words, Programming, Numbers, Famous Quotes, and **Punctuation** (capitals, commas, semicolons) — cycle with `w` / `s` |
+| **Challenges**         | Zen, Sudden Death, Accuracy Rush, and **Reverse** (words appear backwards!)          |
 | **Difficulty levels**  | Easy (top 100 words), Medium (top 300), Hard (all 500)                               |
+| **Live speed gauge**   | A real-time speed meter + correct-character streak counter that lights up when you type fast (`good → fast → FAST → BLAZING`) |
 | **Live stats**         | Real-time WPM, accuracy, and elapsed/remaining time displayed as you type            |
-| **Detailed results**   | Net WPM, Raw WPM, accuracy %, keystroke breakdown, and most-missed characters        |
-| **Tokyo Night theme**  | A carefully tuned colour palette that's easy on the eyes                             |
+| **Detailed results**   | Net WPM, Raw WPM, accuracy %, keystroke breakdown, most-missed characters, and a `★ NEW BEST ★` flash |
+| **4 themes**           | Tokyo Night, Catppuccin, Gruvbox, Nord — cycle live with `t`                         |
 | **Zero dependencies**  | No curses, no external runtime — just Zig + libvaxis                                 |
 
 ## 📦 Prerequisites
@@ -58,9 +61,12 @@ zig build run
 | ---------------------- | --------------------------------------------- |
 | `j` / `k` or `↑` / `↓` | Navigate modes                                |
 | `h` / `l` or `←` / `→` | Cycle difficulty (Easy / Medium / Hard)       |
+| `w` / `s`              | Cycle word category                           |
+| `t`                    | Cycle colour theme                            |
 | `Enter`                | Start selected mode                           |
-| `1`–`5`                | Quick-start word modes (10, 25, 50, 100, 200) |
-| `6`–`8`                | Quick-start timed modes (15s, 30s, 60s)       |
+| `1`–`6`                | Quick-start word modes (10, 25, 50, 100, 200, 500) |
+| `7`–`0`                | Quick-start timed modes (15s, 30s, 60s, 120s) |
+| `z` / `d` / `a` / `x`  | Challenges: Zen / Sudden Death / Accuracy Rush / Reverse |
 | `Esc`                  | Quit                                          |
 
 ### Typing

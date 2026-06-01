@@ -4,6 +4,7 @@ pub const Category = enum {
     programming,
     numbers,
     quotes,
+    punctuation,
 };
 
 pub fn categoryLabel(cat: Category) []const u8 {
@@ -12,10 +13,11 @@ pub fn categoryLabel(cat: Category) []const u8 {
         .programming => "Programming",
         .numbers => "Numbers",
         .quotes => "Famous Quotes",
+        .punctuation => "Punctuation",
     };
 }
 
-pub const ALL_CATEGORIES = [_]Category{ .common, .programming, .numbers, .quotes };
+pub const ALL_CATEGORIES = [_]Category{ .common, .programming, .numbers, .quotes, .punctuation };
 
 // ─── 500 most common English words ──────────────────────────────────────────
 pub const common_words = [_][]const u8{
@@ -196,6 +198,26 @@ pub const quote_words = [_][]const u8{
     "what",      "you",            "want",        "the",     "computer",    "to",      "do",
 };
 
+// ─── Punctuation (capitals, commas, semicolons, full sentences) ──────────────
+pub const punctuation_words = [_][]const u8{
+    "Hello,",     "world!",     "How",        "are",        "you?",       "I'm",        "fine,",      "thanks.",
+    "Wait;",      "stop.",      "Yes,",       "no,",        "maybe.",     "It's",       "a",          "test:",
+    "one,",       "two,",       "three.",     "Don't",      "panic!",     "Really?",    "Sure.",      "Well,",
+    "then;",      "let's",      "go.",        "First,",     "second;",    "third.",     "Code,",      "test,",
+    "ship!",      "Up,",        "down,",      "left,",      "right.",     "Now;",       "later.",     "Quick!",
+    "Slow...",    "Maybe?",     "Always.",    "Never,",     "ever.",      "Read;",      "write;",     "run.",
+    "Save,",      "load,",      "exit.",      "Push;",      "pull;",      "merge.",     "True,",      "false;",
+    "null.",      "Add,",       "sub,",       "mul,",       "div.",       "if,",        "else;",      "while.",
+    "Hi!",        "Bye.",       "Wow!",       "Hmm...",     "OK;",        "done.",      "Stop!",      "Wait...",
+    "Why?",       "Because.",   "Who?",       "What?",      "When?",      "Where?",     "How?",       "Fast,",
+    "faster;",    "fastest!",   "Type,",      "type;",      "type.",      "Begin;",     "pause;",     "end.",
+    "(yes)",      "[no]",       "{ok}",       "'quote'",    "a-b-c",      "x/y",        "1+1=2;",     "3*3=9.",
+    "He",         "said:",      "\"go!\"",    "She",        "asked:",     "\"why?\"",   "Mr.",        "Smith,",
+    "Dr.",        "Jones;",     "etc.",       "e.g.",       "i.e.,",      "vs.",        "p.s.",       "a.m.",
+    "p.m.;",      "100%",       "50/50",      "yes/no",     "on;",        "off.",       "top,",       "bottom;",
+    "live,",      "laugh,",     "love.",      "win;",       "lose;",      "draw.",
+};
+
 // ─── Get word list by category ───────────────────────────────────────────────
 pub fn getWordList(cat: Category) []const []const u8 {
     return switch (cat) {
@@ -203,6 +225,7 @@ pub fn getWordList(cat: Category) []const []const u8 {
         .programming => &programming_words,
         .numbers => &number_words,
         .quotes => &quote_words,
+        .punctuation => &punctuation_words,
     };
 }
 

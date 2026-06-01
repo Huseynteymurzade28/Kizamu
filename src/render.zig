@@ -352,22 +352,45 @@ pub fn drawMenu(
 
     drawSep(box, 0, 3, box.width, s.sep);
 
-    // ── Category ────────────────────────────────────────────────────────────
+    // ── Category (w/s keys) ───────────────────────────────────────────────────
     if (actual_h > 5) {
-        print1(box, 4, 4, "Category:", s.dim);
-        print1(box, 15, 4, "[<]", s.accent);
+        print1(box, 4, 4, "Category", s.dim);
+        print1(box, 13, 4, "[w/s]", s.key);
         const catlabel = words_mod.categoryLabel(words_mod.ALL_CATEGORIES[cat_cursor]);
-        print1(box, 19, 4, catlabel, .{ .fg = t.accent2, .bold = true });
-        print1(box, 19 + @as(u16, @intCast(catlabel.len)), 4, "[>]", s.accent);
+        const cdot: u16 = 20;
+        print1(box, cdot, 4, "\xe2\x97\x82", s.accent); // ◂
+        print1(box, cdot + 2, 4, catlabel, .{ .fg = t.accent2, .bold = true });
+        print1(box, cdot + 2 + @as(u16, @intCast(catlabel.len)) + 1, 4, "\xe2\x96\xb8", s.accent); // ▸
+        // dot indicators for category position
+        if (box.width >= 50) {
+            const ncat = words_mod.ALL_CATEGORIES.len;
+            const dotc: u16 = box.width -| @as(u16, @intCast(ncat)) -| 3;
+            for (0..ncat) |i| {
+                const on = (i == cat_cursor);
+                print1(box, dotc + @as(u16, @intCast(i)), 4, if (on) "\xe2\x97\x8f" else "\xe2\x97\x8b",
+                    if (on) s.accent2 else s.dim2); // ● ○
+            }
+        }
     }
 
-    // ── Difficulty ──────────────────────────────────────────────────────────
+    // ── Difficulty (h/l keys) ─────────────────────────────────────────────────
     if (actual_h > 6) {
-        print1(box, 4, 5, "Difficulty:", s.dim);
-        print1(box, 17, 5, "[<]", s.accent);
+        print1(box, 4, 5, "Difficulty", s.dim);
+        print1(box, 15, 5, "[h/l]", s.key);
         const dlabel = game_mod.ALL_DIFFICULTIES[diff_cursor].label();
-        print1(box, 21, 5, dlabel, .{ .fg = t.magenta, .bold = true });
-        print1(box, 21 + @as(u16, @intCast(dlabel.len)), 5, "[>]", s.accent);
+        const ddot: u16 = 22;
+        print1(box, ddot, 5, "\xe2\x97\x82", s.accent);
+        print1(box, ddot + 2, 5, dlabel, .{ .fg = t.magenta, .bold = true });
+        print1(box, ddot + 2 + @as(u16, @intCast(dlabel.len)) + 1, 5, "\xe2\x96\xb8", s.accent);
+        if (box.width >= 50) {
+            const ndiff = game_mod.ALL_DIFFICULTIES.len;
+            const dotc: u16 = box.width -| @as(u16, @intCast(ndiff)) -| 3;
+            for (0..ndiff) |i| {
+                const on = (i == diff_cursor);
+                print1(box, dotc + @as(u16, @intCast(i)), 5, if (on) "\xe2\x97\x8f" else "\xe2\x97\x8b",
+                    if (on) s.magenta else s.dim2);
+            }
+        }
     }
 
     drawSep(box, 0, 6, box.width, s.sep);
@@ -418,26 +441,31 @@ pub fn drawMenu(
     // ── CHALLENGES ──────────────────────────────────────────────────────────
     if (actual_h > 22) {
         print1(box, 4, 21, "CHALLENGES", s.accent2);
-        const ch_labels  = [_][]const u8{ "Zen", "Sudden Death", "Accuracy Rush" };
+        const ch_keys    = [_][]const u8{ "z", "d", "a", "x" };
+        const ch_labels  = [_][]const u8{ "Zen", "Sudden Death", "Accuracy Rush", "Reverse" };
         const ch_descs   = [_][]const u8{
             "endless flow",
             "wrong word = over",
             "<85% acc = over",
+            "words backwards!",
         };
-        const ch_colors  = [_]Color{ t.accent, t.error_c, t.gold2 };
-        for (0..3) |i| {
+        const ch_colors  = [_]Color{ t.accent, t.error_c, t.gold2, t.magenta };
+        for (0..4) |i| {
             const row: u16 = @as(u16, @intCast(i)) + 22;
             if (row >= actual_h -| 3) break;
             const selected = (i + 10 == cursor);
+            const lstart: u16 = 9;
             if (selected) {
                 fillRow(box, row, s.mid_bg);
                 print1(box, 4, row, ">", s.accent_bold);
-                print1(box, 6, row, ch_labels[i], .{ .fg = ch_colors[i], .bg = t.mid, .bold = true });
-                print1(box, 6 + @as(u16, @intCast(ch_labels[i].len)) + 2, row, ch_descs[i],
+                print1(box, 6, row, ch_keys[i], .{ .fg = t.gold, .bg = t.mid, .bold = true });
+                print1(box, lstart, row, ch_labels[i], .{ .fg = ch_colors[i], .bg = t.mid, .bold = true });
+                print1(box, lstart + @as(u16, @intCast(ch_labels[i].len)) + 2, row, ch_descs[i],
                     .{ .fg = t.dim, .bg = t.mid });
             } else {
-                print1(box, 6, row, ch_labels[i], .{ .fg = ch_colors[i] });
-                print1(box, 6 + @as(u16, @intCast(ch_labels[i].len)) + 2, row, ch_descs[i], s.dim);
+                print1(box, 6, row, ch_keys[i], s.dim);
+                print1(box, lstart, row, ch_labels[i], .{ .fg = ch_colors[i] });
+                print1(box, lstart + @as(u16, @intCast(ch_labels[i].len)) + 2, row, ch_descs[i], s.dim);
             }
         }
     }
@@ -456,8 +484,8 @@ pub fn drawMenu(
         print1(box, 31, help_row + 1, " theme", s.dim);
         print1(box, 4, help_row + 2, "1-9", s.key);
         print1(box, 7, help_row + 2, " modes ", s.dim);
-        print1(box, 14, help_row + 2, "z d a", s.key);
-        print1(box, 19, help_row + 2, " challenges ", s.dim);
+        print1(box, 14, help_row + 2, "z d a x", s.key);
+        print1(box, 21, help_row + 2, " chal ", s.dim);
         print1(box, 31, help_row + 2, "Esc", s.key);
         print1(box, 34, help_row + 2, " quit", s.dim);
     }
@@ -467,7 +495,7 @@ pub fn drawMenu(
 // TYPING SCREEN
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn drawTyping(win: Window, game: *const Game, theme_idx: usize) void {
+pub fn drawTyping(win: Window, game: *const Game, theme_idx: usize, frame: u32) void {
     const t = THEMES[theme_idx % THEME_COUNT];
     const s = makeStyles(t);
 
@@ -494,6 +522,7 @@ pub fn drawTyping(win: Window, game: *const Game, theme_idx: usize) void {
             .sudden_death => .{ .fg = t.error_c, .bold = true },
             .accuracy_rush => .{ .fg = t.gold2,  .bold = true },
             .zen           => .{ .fg = t.accent,  .bold = true },
+            .reverse       => .{ .fg = t.magenta, .bold = true },
             else => s.dim,
         };
         const badge = game.mode.label();
@@ -518,6 +547,9 @@ pub fn drawTyping(win: Window, game: *const Game, theme_idx: usize) void {
     // ── Live stats ───────────────────────────────────────────────────────────
     drawLiveStats(win, game, mx, s, t);
 
+    // ── Live speed gauge + streak (left of row 1) ─────────────────────────────
+    drawSpeedGauge(win, game, mx, 1, s, t, frame);
+
     // ── Separators and word area ─────────────────────────────────────────────
     drawSep(win, mx, 2, w, s.sep);
 
@@ -531,10 +563,58 @@ pub fn drawTyping(win: Window, game: *const Game, theme_idx: usize) void {
         .width = w,
         .height = words_h,
     });
-    drawWords(words_win, game, s, t);
+    drawWords(words_win, game, s, t, frame);
 
     drawSep(win, mx, win.height -| 4, w, s.sep);
     drawProgress(win, game, mx, win.height -| 2, w, s, t);
+}
+
+fn drawSpeedGauge(win: Window, game: *const Game, mx: u16, row: u16, s: Styles, t: Theme, frame: u32) void {
+    if (win.width < 60 or game.start_time == null) return;
+
+    const iw = game.instantWpm();
+    const GW: u16 = 10;
+    const maxw: f64 = 150.0;
+    const ratio = @min(1.0, iw / maxw);
+    const filled: u16 = @intFromFloat(ratio * @as(f64, @floatFromInt(GW)) + 0.0001);
+
+    var c: u16 = mx;
+    c += writeStr(win, c, row, "SPD ", s.dim);
+    var i: u16 = 0;
+    while (i < GW) : (i += 1) {
+        const on = i < filled;
+        const frac = (@as(f64, @floatFromInt(i)) + 0.5) / @as(f64, @floatFromInt(GW));
+        const col: Color = if (!on) t.dim2
+            else if (frac < 0.4) t.correct
+            else if (frac < 0.7) t.gold
+            else t.gold2;
+        print1(win, c + i, row, if (on) "\xe2\x96\xb0" else "\xe2\x96\xb1", .{ .fg = col, .bold = on }); // ▰ ▱
+    }
+    c += GW + 1;
+
+    // Tier label — pulses while blazing fast.
+    const Tier = struct { label: []const u8, col: Color, blaze: bool };
+    const tier: Tier = if (iw < 15) .{ .label = "...",     .col = t.dim,     .blaze = false }
+        else if (iw < 45)  .{ .label = "warm",    .col = t.dim,     .blaze = false }
+        else if (iw < 75)  .{ .label = "good",    .col = t.correct, .blaze = false }
+        else if (iw < 105) .{ .label = "fast",    .col = t.gold,    .blaze = false }
+        else if (iw < 135) .{ .label = "FAST",    .col = t.gold2,   .blaze = false }
+        else               .{ .label = "BLAZING", .col = t.error_c, .blaze = true };
+    const pulse_on = (frame / 3) % 2 == 0;
+    const lstyle: Style = if (tier.blaze)
+        .{ .fg = if (pulse_on) t.error_c else t.gold2, .bold = true }
+    else
+        .{ .fg = tier.col, .bold = iw >= 75 };
+    c += writeStr(win, c, row, tier.label, lstyle);
+
+    // Streak counter (only on wider terminals).
+    if (game.streak >= 5 and win.width >= 78) {
+        c += 2;
+        const hot = game.streak >= 20;
+        const sstyle: Style = if (hot) .{ .fg = t.gold, .bold = true } else .{ .fg = t.accent2 };
+        c += writeStr(win, c, row, "\xc3\x97", sstyle); // ×
+        _ = writeU64(win, c, row, @intCast(game.streak), sstyle);
+    }
 }
 
 fn drawLiveStats(win: Window, game: *const Game, mx: u16, s: Styles, t: Theme) void {
@@ -680,10 +760,15 @@ fn drawProgress(win: Window, game: *const Game, mx: u16, row: u16, avail_w: u16,
     }
 }
 
-fn drawWords(words_win: Window, game: *const Game, s: Styles, t: Theme) void {
-    _ = t;
+fn drawWords(words_win: Window, game: *const Game, s: Styles, t: Theme, frame: u32) void {
     if (words_win.width == 0 or words_win.height == 0) return;
     const ww: u16 = words_win.width;
+
+    // Pulsing cursor for a livelier feel.
+    const cursor_st: Style = if ((frame / 5) % 2 == 0)
+        s.cursor
+    else
+        .{ .fg = t.bg, .bg = t.accent2, .bold = true };
 
     var layout_row: [game_mod.MAX_WORDS]u16 = .{0} ** game_mod.MAX_WORDS;
     var layout_col: [game_mod.MAX_WORDS]u16 = .{0} ** game_mod.MAX_WORDS;
@@ -724,7 +809,7 @@ fn drawWords(words_win: Window, game: *const Game, s: Styles, t: Theme) void {
                     const st = if (game.input_buf[ci] == word[ci]) s.correct else s.err_ul;
                     print1(words_win, colu, vis_row, word[ci .. ci + 1], st);
                 } else if (ci == game.input_len) {
-                    print1(words_win, colu, vis_row, word[ci .. ci + 1], s.cursor);
+                    print1(words_win, colu, vis_row, word[ci .. ci + 1], cursor_st);
                 } else {
                     print1(words_win, colu, vis_row, word[ci .. ci + 1], s.fg);
                 }
@@ -738,7 +823,7 @@ fn drawWords(words_win: Window, game: *const Game, s: Styles, t: Theme) void {
             if (game.input_len == word.len) {
                 const colu: u16 = lc + @as(u16, @intCast(word.len));
                 if (colu < words_win.width)
-                    print1(words_win, colu, vis_row, " ", s.cursor);
+                    print1(words_win, colu, vis_row, " ", cursor_st);
             }
         } else {
             print1(words_win, lc, vis_row, word, s.dim);
@@ -755,7 +840,7 @@ fn drawWords(words_win: Window, game: *const Game, s: Styles, t: Theme) void {
 // RESULTS SCREEN
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn drawResults(win: Window, game: *const Game, theme_idx: usize) void {
+pub fn drawResults(win: Window, game: *const Game, theme_idx: usize, frame: u32) void {
     const t = THEMES[theme_idx % THEME_COUNT];
     const s = makeStyles(t);
 
@@ -802,6 +887,17 @@ pub fn drawResults(win: Window, game: *const Game, theme_idx: usize) void {
     print1(box, 3, 2, cl, s.accent2);
     const dl = game.difficulty.label();
     print1(box, 3 + @as(u16, @intCast(cl.len)) + 2, 2, dl, s.dim);
+
+    // Flashing NEW BEST banner (top-right of row 2).
+    if (game.new_best and game.over_reason == .normal) {
+        const banner = "\xe2\x98\x85 NEW BEST \xe2\x98\x85"; // ★ NEW BEST ★
+        const bw: u16 = 12;
+        const bcol: u16 = box.width -| bw -| 2;
+        const on = (frame / 4) % 2 == 0;
+        const bstyle: Style = .{ .fg = if (on) t.gold else t.gold2, .bold = true };
+        if (bcol > @as(u16, @intCast(cl.len)) + 6)
+            print1(box, bcol, 2, banner, bstyle);
+    }
 
     if (actual_h <= 6) {
         // Tiny terminal: just show WPM
